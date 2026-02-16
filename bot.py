@@ -14,9 +14,6 @@ import sys
 import threading
 import Tasks
 
-
-
-
 class botNode(Node):
 
     def __init__(self, botString, explX, explY):
@@ -83,10 +80,10 @@ class botNode(Node):
     def requestHandling(self, TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS):
         #msgFields = msg.data.split(" ")
         #check who the interruption is for
+        NewMsg = String()#new message
         if((TO == self.botName) or (TO == "all")):
-            NewMsg = String()#new message
             #choose if a request should be made
-            if(self.interruptLoad <= self.maxInterruptLoad):
+            if((int(URGENCY) >= 1) or (self.interruptLoad <= self.maxInterruptLoad)):#if the task is high priority
                 #find how much distance must be traveled until the task is reached
                 #we do this by creating a copy and then adding the new potential task
                 with self.SubtaskListLock:
@@ -99,11 +96,20 @@ class botNode(Node):
                 #create a request for the interruption, swap to and from
                 NewMsg.data = Tasks.createMsgString(TYPE = "request", FROM = self.botName, TO = FROM, URGENCY = "",
                                                     ID = ID, TASK = TASK, PARAMS = [str(distance)])
+                                                    
+                self.publisher_.publish(NewMsg)#actually publish
+                self.get_logger().info(NewMsg.data)#print to terminal
             #ignore interruption
             else:
                 NewMsg.data = Tasks.createMsgString(TYPE = "ignore", FROM = self.botName, TO = FROM, URGENCY = "",
                                                     ID = ID, TASK = TASK, PARAMS = [])
-                                                    
+                self.publisher_.publish(NewMsg)#actually publish
+                self.get_logger().info(NewMsg.data)#print to terminal
+        
+         #if the interruption does not apply to this bot, sen ignore
+        else:
+            NewMsg.data = Tasks.createMsgString(TYPE = "ignore", FROM = self.botName, TO = FROM, URGENCY = "",
+                                                ID = ID, TASK = TASK, PARAMS = [])
             self.publisher_.publish(NewMsg)#actually publish
             self.get_logger().info(NewMsg.data)#print to terminal
     
@@ -146,14 +152,14 @@ class botNode(Node):
             self.currFinalX = self.currSubtask.finishX
             self.currFinalY = self.currSubtask.finishY
             self.currUrgency = self.currSubtask.urgency
-            self.get_logger().info(f"{self.botName} started {self.currSubtask.subTaskID} of task" + 
+            self.get_logger().info(f"started {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})") 
                         
         while(subtaskNotFinished):
             #check for a higher priority task
             if(self.currUrgency > self.currSubtask.urgency):
                  #output interrupted message
-                 self.get_logger().info(f"{self.botName} INTERRUPTED {self.currSubtask.subTaskID} of task " + 
+                 self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
                         
                  with self.SubtaskListLock:
@@ -166,7 +172,7 @@ class botNode(Node):
                     self.currFinalX = self.currSubtask.finishX
                     self.currFinalY = self.currSubtask.finishY
                     self.currUrgency = self.currSubtask.urgency
-                    self.get_logger().info(f"{self.botName} started {self.currSubtask.subTaskID} of task " + 
+                    self.get_logger().info(f"started {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
             
             #do subtask
@@ -177,7 +183,7 @@ class botNode(Node):
         if(self.currSubtask.isMainTask == False):#finished user interrupt task
             self.interruptLoad -= self.interruptLoadDecay
                 
-        self.get_logger().info(f"{self.botName} finished subtask {self.currSubtask.subTaskID}"
+        self.get_logger().info(f"finished {self.currSubtask.urgency} {self.currSubtask.subTaskID}"
                 + f" of task {self.currSubtask.taskID}\nDeferment time: {time.time() -self.currSubtask.creationTime}")
         self.currSubtask.destroy_node()
             
