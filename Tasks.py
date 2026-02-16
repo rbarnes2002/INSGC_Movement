@@ -7,8 +7,6 @@ from geometry_msgs.msg import Twist
 
 import subprocess
 
-#from rclpy.callback_groups import ReentrantCallbackGroup
-
 import time
 
 import re #used for multi delimiter split
@@ -18,10 +16,9 @@ import math
 #1) Create relevant subtask classes derived from the subtask class
 #2) A create task func must be written, this func creates all of the subtasks and returns a list of them
 #3) Said create task func must be added to the NewTask func at the bottom of this file, 
-#	This func chooses what create task func to call according to the task string
+#	This func chooses what create task func to call according to the task argument
 
-
-
+######################### HELPER FUNC SECTION  ####################################
 
 #given some parameters, creates a message to send using the old message
 #note: parameters (other than receivedMessage) are for the NEW message 
@@ -66,6 +63,7 @@ def createMsgString(TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS):
         responseString += param + " "
 
     return responseString
+    
 #
 #takes a string message received and terms it into variables,this is mainly done for readability
 #
@@ -104,6 +102,11 @@ def ParseMsg(receivedMessage):
             i += 1
         return (TYPE, FROM, TO, URGENCY, TASKID, TASK, PARAMS)
     return None
+
+
+#helper func to find the distance between two points
+def findDistance(x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0):
+    return ((x2 - x1)**2 + (y2 - y1)**2)**.5
     
 
 #helper func, gets the position of the bot from gazebo
@@ -131,9 +134,54 @@ def get_pose(MODEL_NAME):
     except FileNotFoundError:
         print("gz command not found")
         return None
-    
 
-#subtask
+######################### SUBTASK SECTION ####################################
+#define objects as children of the subtasks class
+
+#
+#Parent class for any other kind of subClass
+#To create any other kind of subtask doSubtask and getPercentDone MUST be overwritten
+#doSubtask MUST return False if it is finished and true if it is 
+#look at moveTo for an example 
+class SubTask(Node):
+    def __init__(self, BotName, SubTaskID, TaskID):
+         #give the node a name and a namespace
+         super().__init__(str(BotName) + "_" + str(SubTaskID) + "_" + str(TaskID), namespace= f'/model/{BotName}')
+         
+         self.MovementPublisher = self.create_publisher(Twist, "cmd_vel", 10)
+         
+         #task descriptions
+         self.botName = BotName
+         self.taskID = TaskID
+         self.subTaskID = SubTaskID
+         #priority
+         self.urgency = 0
+         #whether or not this task is a part of the bots main explore task
+         self.isMainTask =  False
+         #creation time of the task, used to output deferment time
+         self.creationTime = time.time()
+         
+         #final coordinates after the subtask is finished
+         self.finishX = 0.0
+         self.finishY = 0.0
+         self.finishZ = 0.0
+         
+         #specific vars for this kind of subtask
+         
+         
+    #this method is needed, this call actually runs the subtask
+    def doSubtask(self):
+        print("Do the next subtask")
+        return False
+        
+    def getPercentDone(self):
+        print("return the percentage done")
+        return 0.0
+
+#
+#Parent class for any other kind of subClass
+#To create any other kind of subtask doSubtask and getPercentDone MUST be overwritten
+#look at moveTo for an example 
 class SubTask(Node):
     def __init__(self, BotName, SubTaskID, TaskID):
          #give the node a name and a namespace
@@ -167,8 +215,11 @@ class SubTask(Node):
     def getPercentDone(self):
         print("return the percentage done")
         return 0.0
-        
 
+#
+# Command that simply makes the robot move forward for some number of seconds
+#NOTE: AS OF THE 2/16/26 VERSION OF THIS CODE THIS SUBTASK HAS NOT BEEN BUGTESTED
+#
 class MoveForward(SubTask):
 
     def __init__(self, BotName, SubTaskID, TaskID, Time):
@@ -197,20 +248,11 @@ class MoveForward(SubTask):
         while((time.time() - strTime) <= self.time):
             self.MovementPublisher.publish(cmd)
             time.sleep(.1)
-            
-#creates a list of subtasks in order to fufill the given task   
-def CreateMoveForwardTask(BotName, taskID, speed = 3.0, time = 10):
-        subTaskList = []
-        
-        for i in range(time):
-            #each subtask will be moving forward for 1 sec
-            currSubTask = MoveForward(BotName, str(i), taskID, 1)
-            subTaskList.append(currSubTask)
-            
-        return subTaskList
-        
-        
+          
+          
+#
 #### MOVE to some specified point in space ####
+#
 class MoveTo(SubTask):
     def __init__(self, BotName, Urgency, SubTaskID, TaskID, X, Y, Speed):
     
@@ -296,15 +338,43 @@ class MoveTo(SubTask):
             if(angle > 2*math.pi):
                 angle -= 2*math.pi
         return angle
+
+######################### CREATE TASK SECTION ####################################
+#creates a list of subtasks in order to fufill the given task   
+
+
+#
+# Creates a list of moveForward subtasks
+#
+def CreateMoveForwardTask(BotName, taskID, speed = 3.0, time = 10):
+        subTaskList = []
         
-#helper func to find the distance between two points
-def findDistance(x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0):
-    return ((x2 - x1)**2 + (y2 - y1)**2)**.5
-    
+        for i in range(time):
+            #each subtask will be moving forward for 1 sec
+            currSubTask = MoveForward(BotName, str(i), taskID, 1)
+            subTaskList.append(currSubTask)
+            
+        return subTaskList
+
+#
+# Creates a single moveto subtask and returns it wrapped as a list
+#
 def CreateMoveToTask(BotName, urgency, taskID, X = 0, Y = 0, speed = 1.0):
     subTaskList = [MoveTo(BotName, urgency, 0, taskID, X, Y, speed)]
     return (subTaskList)
-
+    
+#
+# Create a series of moveto tasks that explore a grid area
+#
+# creates a "Z" pattern of exploring some area
+# * * * * * * * * 
+# *
+# * * * * * * * *
+#               *   Height
+# * * * * * * * * 
+# *              
+# * * * * * * * * (X_origin, Y_Origin)
+#      Width
 def CreateExploreTasks(BotName, urgency, taskID, X_Origin, Y_Origin, X_Width, Y_Height, speed = .5):
     subTaskList = []
     
@@ -341,12 +411,11 @@ def CreateExploreTasks(BotName, urgency, taskID, X_Origin, Y_Origin, X_Width, Y_
         Y += increment#increment again for the new actual row
         
     return subTaskList
-            
-        
+    
 
-
+######################### NewTask ####################################
 #ALL NEW TASKS MUST BE ADDED TO THIS FUNC
-#THIS FUNC CHOOSES WHICH TASK TO CREATE
+#THIS FUNC CHOOSES WHICH TASK TO CREATE BASED ON THE TASK ARGUMENT
 def NewTask(TO, URGENCY, ID, TASK, PARAMS):
     #Note: my version of python doesnt have match cases~Trey
     if(TASK == "moveto"):
