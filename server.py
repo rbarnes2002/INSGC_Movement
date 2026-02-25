@@ -37,7 +37,7 @@ class ServerNode(Node):
     #listens and publishes, responds to bot requests
     def serverListener(self, msg):
         #parse msg string, note when hearing a request the params are [distance]
-        TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
+        TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
         
         #check if interruption is still available
         for interrupt in self.listOfInterrupts:
@@ -46,15 +46,15 @@ class ServerNode(Node):
                     if(interrupt[2] > float(PARAMS[0])):#check if the current distance is shorter
                         interrupt[2] = float(PARAMS[0])#update distance
                         interrupt[3] = FROM#change botname
-                
+                        
                 #if "request" or "ignore"
                 interrupt[4] += 1 #increment the amount of responses
                 if(interrupt[4] >= self.numOfBots):#if there have been enough responses
                     #create accept string
                     #message values, 
-                    TYPEint, FROMint, TOint, URGENCYint, IDint, TASKint, PARAMSint = Tasks.ParseMsg(interrupt[1])
+                    TYPEint, FROMint, TOint, URGENCYint, PRIORITYint, IDint, TASKint, PARAMSint = Tasks.ParseMsg(interrupt[1])
                     msgString = createMsgString(TYPE = "accept", FROM = "server", TO = interrupt[3],
-                                                URGENCY = URGENCYint, ID = ID, TASK = TASKint, PARAMS = PARAMSint)
+                                                URGENCY = URGENCYint, PRIORITY = PRIORITYint, ID = ID, TASK = TASKint, PARAMS = PARAMSint)
                     newMsg = String()
                     newMsg.data = msgString
                     #remove from list of pending interruption
@@ -69,7 +69,7 @@ class ServerNode(Node):
     def addressUserInput(self, msg):
         msgFields = msg.data.split(" ")
         #adds interruption ID to list, note format: ID, msg, minimumDistance, botname, #of requests to hear
-        self.listOfInterrupts.append([msgFields[4], msg.data, float(9e7), "botname", 0])
+        self.listOfInterrupts.append([msgFields[5], msg.data, float(9e7), "botname", 0])
         self.get_logger().info(msg.data)
         self.publisher_.publish(msg)
 

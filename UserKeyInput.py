@@ -14,7 +14,7 @@ class UserInput(Node):
         self.publisher_ = self.create_publisher(String, 'userTopic', 100)
         self.InterruptID = 0
         
-        self.validKeyList = ['a', 's', 'd', 'f', 'q']
+        self.validKeyList = ['a', 's', 'd', 'f', 'q', 'g', 'h', 'j', 'k', 'l']
         
         self.publishInput()
 
@@ -27,10 +27,10 @@ class UserInput(Node):
         
         interruption = ""
         userPrompt = ("User key options:"
-             f"\n{self.validKeyList[0]} NonUrgent Move To (1,1)" 
-             f"\n{self.validKeyList[1]} NonUrgent Move To (1,-1)"
-             f"\n{self.validKeyList[2]} Urgent Move To (8,8)"
-             f"\n{self.validKeyList[3]} Urgent Move To (8,-8)"
+             f"\n{self.validKeyList[0]} NonUrgent Priority 1 Move To (56, 16)" 
+             f"\n{self.validKeyList[1]} NonUrgent Priority 1 Move To (56, 14)"
+             f"\n{self.validKeyList[2]} Urgent Priority 1 Move To (63, 23)"
+             f"\n{self.validKeyList[3]} Urgent Priority 1 Move To (63, 7)"
              f"\n{self.validKeyList[4]} to quit")
              
         print(userPrompt)
@@ -40,16 +40,24 @@ class UserInput(Node):
                 keyInput = str(sys.stdin.read(1))#read one char from the input stream
                 
                 if(keyInput == self.validKeyList[0]):
-                    interruption = f"interruption server all 0 {self.InterruptID} moveto 1 1 1"
+                    interruption = f"interruption server all 0 1 {self.InterruptID} moveto 56 16 .6"
                 elif(keyInput == self.validKeyList[1]):
-                    interruption = f"interruption server all 0 {self.InterruptID} moveto 1 -1 1"
+                    interruption = f"interruption server all 0 1 {self.InterruptID} moveto 56 14 .6"
                 elif(keyInput == self.validKeyList[2]):
-                    interruption = f"interruption server all 5 {self.InterruptID} moveto 8 8 1"
+                    interruption = f"interruption server all 1 1 {self.InterruptID} moveto 63 23 .6"
                 elif(keyInput == self.validKeyList[3]):
-                    interruption = f"interruption server all 5 {self.InterruptID} moveto 8 -8 1"
+                    interruption = f"interruption server all 1 1 {self.InterruptID} moveto 63 7 .6"
                 elif(keyInput == self.validKeyList[4]):
                     print("Quitting..")
                     break
+                elif(keyInput == self.validKeyList[5]):
+                    interruption = f"interruption server all 1 2 {self.InterruptID} moveto 51 11 .6"
+                elif(keyInput == self.validKeyList[6]):
+                    interruption = f"interruption server all 1 3 {self.InterruptID} moveto 51 9 .6"
+                elif(keyInput == self.validKeyList[7]):
+                    interruption = f"interruption server all 1 2 {self.InterruptID} moveto 58 18 .6"
+                elif(keyInput == self.validKeyList[8]):
+                    interruption = f"interruption server all 1 3 {self.InterruptID} moveto 58 2 .6"
                 else:
                     print("Please enter valid input")
                     print(userPrompt)

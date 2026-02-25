@@ -14,6 +14,8 @@ import sys
 import threading
 import Tasks
 
+import json
+
 class botNode(Node):
 
     def __init__(self, botString, explX, explY):
@@ -32,19 +34,25 @@ class botNode(Node):
     	
     	#publisher section
         self.publisher_ = self.create_publisher(String, '/BotPublish', 100) 
+        
+        #publishes to the logging system
+        self.logPublisher = self.create_publisher(String, "/task_events", 10)
     	
-    	#list of tasks
+    	#list of subtasks
         self.listOfTasks = []
     	
     	#data for exploration params
         self.exploreX = explX
         self.exploreY = explY
-        self.exploreWidth = 2
-        self.exploreHeight = 2
+        self.exploreWidth = 10
+        self.exploreHeight = 10
    
     	#initialize exploration
-        self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
+        self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, 2, "Explore_"+ self.botName, 
                                                     self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
+        
+        #task tracker for the main explore task
+        self.listOfTaskTrackers = [Tasks.taskTracker(taskID = "Explore_" + self.botName, numOfSubtasks = len(self.listOfTasks))]
                                    
         self.currSubtask = self.listOfTasks.pop(0)#current subtask being done
         #the coords at the end of the current subtask
@@ -54,7 +62,7 @@ class botNode(Node):
     	
     	#user interruption handling, used to check if a bot should request some interruption
         self.interruptLoad = 0.0
-        self.maxInterruptLoad = 2.0 #maximum number of user interrupts the robot will have(including current ones)
+        self.maxInterruptLoad = 30.0 #maximum number of user interrupts the robot will have (including current ones)
         self.interruptLoadDecay = 1.0 #each time a user task is done, interruptLoad is decreased by this much
     	
     	#this section is designed to run a check for tasks
@@ -63,21 +71,18 @@ class botNode(Node):
         
     #listens to and responds to server
     def botListener(self, msg):
-        msgFields = msg.data.split(" ")
-        TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
-        #print(f"{TYPE} {FROM} {TO} {URGENCY} {ID} {TASK}")
-        #print(PARAMS)
+        TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
         
         #check if it is an accept, if it is for this bot accept interruption
         if(TYPE == "accept"):
-            self.acceptHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, ID = ID, TASK = TASK, PARAMS = PARAMS)
+            self.acceptHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
                     
         #check if its an interruption, if it is handle request
         if(TYPE == "interruption"):
-           self.requestHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, ID = ID, TASK = TASK, PARAMS = PARAMS)
+           self.requestHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
      
     #handles whether or not to send a request(to handle some interruption) and sending the request itself
-    def requestHandling(self, TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS):
+    def requestHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
         #msgFields = msg.data.split(" ")
         #check who the interruption is for
         NewMsg = String()#new message
@@ -88,33 +93,36 @@ class botNode(Node):
                 #we do this by creating a copy and then adding the new potential task
                 with self.SubtaskListLock:
                     copyOfTasks = self.listOfTasks.copy()
-                    
-                copyOfTasks += Tasks.NewTask(TO, URGENCY, ID, TASK, PARAMS)
-                #run optimization here?
-                distance = self.TravelDistanceUntil(copyOfTasks, ID, 0)
+                
+                copyOfTasks += Tasks.NewTask(TO, URGENCY, PRIORITY, ID, TASK, PARAMS)
+
+                #run optimization
+                copyOfTasks = Tasks.orderSubtasks(copyOfTasks, self.currFinalX, self.currFinalY)
+                
+                time = self.TimeUntilSubtask(copyOfTasks, ID, 0)
                
                 #create a request for the interruption, swap to and from
-                NewMsg.data = Tasks.createMsgString(TYPE = "request", FROM = self.botName, TO = FROM, URGENCY = "",
-                                                    ID = ID, TASK = TASK, PARAMS = [str(distance)])
+                NewMsg.data = Tasks.createMsgString(TYPE = "request", FROM = self.botName, TO = FROM, URGENCY = "", PRIORITY = "",
+                                                    ID = ID, TASK = TASK, PARAMS = [str(time)])
                                                     
                 self.publisher_.publish(NewMsg)#actually publish
                 self.get_logger().info(NewMsg.data)#print to terminal
             #ignore interruption
             else:
-                NewMsg.data = Tasks.createMsgString(TYPE = "ignore", FROM = self.botName, TO = FROM, URGENCY = "",
+                NewMsg.data = Tasks.createMsgString(TYPE = "ignore", FROM = self.botName, TO = FROM, URGENCY = "", PRIORITY = "",
                                                     ID = ID, TASK = TASK, PARAMS = [])
                 self.publisher_.publish(NewMsg)#actually publish
                 self.get_logger().info(NewMsg.data)#print to terminal
         
-         #if the interruption does not apply to this bot, sen ignore
+         #if the interruption does not apply to this bot, send ignore
         else:
-            NewMsg.data = Tasks.createMsgString(TYPE = "ignore", FROM = self.botName, TO = FROM, URGENCY = "",
+            NewMsg.data = Tasks.createMsgString(TYPE = "ignore", FROM = self.botName, TO = FROM, URGENCY = "", PRIORITY = "",
                                                 ID = ID, TASK = TASK, PARAMS = [])
             self.publisher_.publish(NewMsg)#actually publish
             self.get_logger().info(NewMsg.data)#print to terminal
     
     #handles actually accepting a new task, creates new tasks and optimizes order placement
-    def acceptHandling(self, TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS):
+    def acceptHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
         #check if it is for this bot
         if(TO == self.botName):
             #wait for the top subtask to be popped
@@ -122,12 +130,19 @@ class botNode(Node):
                 self.get_logger().info(f"accepted {self.botName} {ID}")
             
                 #create the subtasks, update interruption load
-                newTasks = Tasks.NewTask(TO = TO, URGENCY = URGENCY,
+                newTasks = Tasks.NewTask(TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY,
                                             ID = ID, TASK = TASK, PARAMS = PARAMS)
+                #create task tracker and add to list                    
+                self.listOfTaskTrackers.append(Tasks.taskTracker(taskID = ID, numOfSubtasks = len(newTasks)))
+                
+                #log that new task has been recieved
+                self.SendLog(subtask = newTasks[0], event = "task_received")
+                
                 self.interruptLoad += len(newTasks)
                 #update list of tasks 
                 self.listOfTasks += newTasks
                 self.listOfTasks = Tasks.orderSubtasks(self.listOfTasks, self.currFinalX, self.currFinalY)
+                
                 #set current highest priority
                 if(self.currUrgency < self.listOfTasks[0].urgency):
                     self.currUrgency = self.listOfTasks[0].urgency
@@ -139,8 +154,9 @@ class botNode(Node):
             self.ControlLoop()#do subtask()
         else:
             #No tasks/exploration tasks, create more exploration tasks
-            self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
-                               self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
+            #self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
+             #                  self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
+             self.get_logger().info("No tasks")
     
     #checks higher urgency interruptions and does a portion of the currentSubtask
     #NOTE: does not set currentSubtask unless a higher priority one is found
@@ -153,15 +169,21 @@ class botNode(Node):
             self.currFinalY = self.currSubtask.finishY
             self.currUrgency = self.currSubtask.urgency
             self.get_logger().info(f"started {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
-                        f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})") 
-                        
+                        f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
+            
+            #log subtask start and task start (if it is the first subtask started)
+            self.checkForNewTaskStart()
+        
+        #while the current task is not finished
         while(subtaskNotFinished):
             #check for a higher priority task
             if(self.currUrgency > self.currSubtask.urgency):
                  #output interrupted message
                  self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
-                        
+                 #send interruption to logger
+                 self.SendLog(subtask = self.currSubtask, event = "task_interrupted")
+                 
                  with self.SubtaskListLock:
                     #put current task pack into the list
                     self.listOfTasks.append(self.currSubtask)
@@ -174,8 +196,10 @@ class botNode(Node):
                     self.currUrgency = self.currSubtask.urgency
                     self.get_logger().info(f"started {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
-            
-            #do subtask
+                    
+                    self.checkForNewTaskStart()
+
+            #do subtask, use subtaskNotFinished to determine if task needs to be continued
             subtaskNotFinished = self.currSubtask.doSubtask()
             time.sleep(.3)
         
@@ -185,14 +209,58 @@ class botNode(Node):
                 
         self.get_logger().info(f"finished {self.currSubtask.urgency} {self.currSubtask.subTaskID}"
                 + f" of task {self.currSubtask.taskID}\nDeferment time: {time.time() -self.currSubtask.creationTime}")
+            
+        self.UpdateTracker()#update task tracker
+        
         self.currSubtask.destroy_node()
             
                 
-            
+    #handles updating taskTracker/logging if finished
+    def UpdateTracker(self):
+        for Task in self.listOfTaskTrackers:
+            if (Task.taskID == self.currSubtask.taskID):
+                Task.numOfSubtasksLeft -= 1
 
-    #find how much distance will be covered until a specific subtask is reached
-    def TravelDistanceUntil(self, taskList, taskID, subTaskID):
-        totalDistance = 0.0
+                self.SendLog(subtask = self.currSubtask, event = "subtask_end")
+                
+                if (Task.numOfSubtasksLeft <= 0):#if this was the final subtask of the task, log the finish
+                    self.get_logger().info(f"finished TASK: {Task.taskID} URGENCY: {self.currSubtask.urgency} PRIORITY: {self.currSubtask.priority}")
+                    #send to logger
+                    self.SendLog(subtask = self.currSubtask, event = "task_end")
+                    
+                return
+        self.get_logger().info((f"ERROR: Could not find TASK: {Task.taskID} URGENCY: {self.currSubtask.urgency}"))
+    
+    #checks if the current subtask is the first to be done for the task
+    def checkForNewTaskStart(self):
+        for Task in self.listOfTaskTrackers:
+            if (Task.taskID == self.currSubtask.taskID):#when found in listOfTrackers
+                if(Task.numOfSubtasksLeft == Task.numOfSubtasks):
+                    self.SendLog(subtask = self.currSubtask, event = "task_start")
+                self.SendLog(subtask = self.currSubtask, event = "subtask_start")
+    
+    #send update to logger node
+    def SendLog(self, subtask, event):
+        #set log vals
+        logDict = {
+                    "ts_unix": float(time.time()),
+                    "robot": self.botName,
+                    "task_id": subtask.taskID,
+                    "subtask_id": subtask.subTaskID,
+                    "baseline_task": str(subtask.isMainTask),
+                    "event": event,
+                    "urgency": subtask.urgency,
+                    "priority": subtask.priority,
+                    "task_name": subtask.taskName
+                    }
+        msg = String()
+        msg.data = json.dumps(logDict)#turn python dict to json
+        self.logPublisher.publish(msg)#send 
+
+    #approximates the amount of time until a specific subtask is reached
+    #replaced "TravelDistanceUntil" func
+    def TimeUntilSubtask(self, subtaskList, taskID, subTaskID):
+        totalTime = 0.0
         
         prevX, prevY, z, prevYaw, = 0.0, 0.0, 0.0, 0.0
         #get the pose
@@ -202,16 +270,29 @@ class botNode(Node):
                 prevX, prevY, z, prevYaw = pose
                 break
         #get distance between robots current position and the final location of the current subtask
-        totalDistance = Tasks.findDistance(self.currFinalX, self.currFinalY, prevX, prevY)
+        #time = velocity/distance
+        distance = Tasks.findDistance(self.currFinalX, self.currFinalY, prevX, prevY)
+        if(distance != 0):
+            totalTime += self.currSubtask.linear_speed/distance
+        
+        totalTime += self.currSubtask.taskTimeRecquired
         prevX, prevY = self.currFinalX, self.currFinalY
         
         #if its not the task we are looking for, find the distance and add it to the total
-        for subtask in taskList:
-            totalDistance += Tasks.findDistance(subtask.finishX, subtask.finishY, prevX, prevY)
+        for subtask in subtaskList:
+            #find travel time from each subtask to the next
+            if(subtask.locationBased == True):#only do if the task is location based and if the distance isn't 0
+                distance = Tasks.findDistance(self.currFinalX, self.currFinalY, prevX, prevY)
+                if(distance != 0):
+                    totalTime += self.currSubtask.linear_speed/distance
+            
             prevX = subtask.finishX
             prevY = subtask.finishY
             if((subtask.taskID == taskID) and (subtask.subTaskID == subTaskID)):
-                return totalDistance
+                return totalTime
+            #task time is added after since this func aims to find the time until the task can be STARTED
+            #not COMPLETED
+            totalTime += subtask.taskTimeRecquired
         
 def main(args=None):
 

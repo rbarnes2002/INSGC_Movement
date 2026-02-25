@@ -22,7 +22,7 @@ import math
 
 #given some parameters, creates a message to send using the old message
 #note: parameters (other than receivedMessage) are for the NEW message 
-def createMsgString(receivedMessage, TYPE = "", FROM = "", TO = "", URGENCY = "", ID = -1, TASK = ""):
+def createMsgString(receivedMessage, TYPE = "", FROM = "", TO = "", URGENCY = "", PRIORITY ="", ID = -1, TASK = ""):
     newMessage = ""
     params = ""# used for task parameters
     receivedMessageFields = receivedMessage.split(" ")
@@ -34,13 +34,15 @@ def createMsgString(receivedMessage, TYPE = "", FROM = "", TO = "", URGENCY = ""
         TO = receivedMessageFields[1]
     if(URGENCY == ""):
         URGENCY = receivedMessageFields[3]
+    if(PRIORITY == ""):
+        PRIORITY = receivedMessageFields[4]
     if(ID == -1):
-        ID = receivedMessageFields[4]   
+        ID = receivedMessageFields[5]   
     if(TASK == ""):
-        TASK = receivedMessageFields[5]
+        TASK = receivedMessageFields[6]
     
     #get params from received message
-    i = 6
+    i = 7
     while i < len(receivedMessageFields):
         params += " " + receivedMessageFields[i]
         i += 1
@@ -49,7 +51,7 @@ def createMsgString(receivedMessage, TYPE = "", FROM = "", TO = "", URGENCY = ""
     return newMessage
 
 #create a response string from the given values
-def createMsgString(TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS):
+def createMsgString(TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
 
     responseString = ""
     responseString += TYPE + " "
@@ -57,6 +59,7 @@ def createMsgString(TYPE, FROM, TO, URGENCY, ID, TASK, PARAMS):
     responseString += TO + " "
     if((TYPE == "interruption") or (TYPE == "accept")):#request and ignore messages dont have urgency
         responseString += URGENCY + " "
+        responseString += PRIORITY + " "
     responseString += ID + " "
     responseString += TASK + " "
     for param in PARAMS:
@@ -76,15 +79,16 @@ def ParseMsg(receivedMessage):
         FROM = msgFields[1]
         TO = msgFields[2]
         URGENCY = msgFields[3]
-        TASKID = msgFields[4]
-        TASK = msgFields[5]
+        PRIORITY = msgFields[4]
+        TASKID = msgFields[5]
+        TASK = msgFields[6]
         PARAMS = []
         #get params from received message
-        i = 6
+        i = 7
         while i < len(msgFields):
             PARAMS.append(msgFields[i])
             i += 1
-        return (TYPE, FROM, TO, URGENCY, TASKID, TASK, PARAMS)
+        return (TYPE, FROM, TO, URGENCY, PRIORITY, TASKID, TASK, PARAMS)
         
     if((msgFields[0] == "request") or (msgFields[0] == "ignore")):
         TYPE = msgFields[0]
@@ -92,6 +96,7 @@ def ParseMsg(receivedMessage):
         TO = msgFields[2]
         URGENCY = "-1"#requests and ignore do not have urgency, this is only done to simply addressing 
                     #the output of this func
+        PRIORITY = "-1"
         TASKID = msgFields[3]
         TASK = msgFields[4]
         PARAMS = []
@@ -100,7 +105,7 @@ def ParseMsg(receivedMessage):
         while i < len(msgFields):
             PARAMS.append(msgFields[i])
             i += 1
-        return (TYPE, FROM, TO, URGENCY, TASKID, TASK, PARAMS)
+        return (TYPE, FROM, TO, URGENCY, PRIORITY, TASKID, TASK, PARAMS)
     return None
 
 
@@ -138,6 +143,13 @@ def get_pose(MODEL_NAME):
 ######################### SUBTASK SECTION ####################################
 #define objects as children of the subtasks class
 
+#used to keep track data for a TASK not just a subtask
+class taskTracker:
+    def __init__(self, taskID, numOfSubtasks):
+        self.taskID = taskID
+        self.numOfSubtasks = numOfSubtasks
+        self.numOfSubtasksLeft = self.numOfSubtasks
+
 #
 #Parent class for any other kind of subClass
 #To create any other kind of subtask doSubtask and getPercentDone MUST be overwritten
@@ -154,7 +166,9 @@ class SubTask(Node):
          self.botName = BotName
          self.taskID = TaskID
          self.subTaskID = SubTaskID
-         #priority
+         self.taskName = "GenericTaskName"
+         #urgency/priority
+         self.priority = 0
          self.urgency = 0
          #whether or not this task is a part of the bots main explore task
          self.isMainTask =  False
@@ -165,6 +179,16 @@ class SubTask(Node):
          self.finishX = 0.0
          self.finishY = 0.0
          self.finishZ = 0.0
+         self.locationBased = True
+         
+         #Movement vars
+         self.linear_speed = 0.0
+         self.angular_speed = 0.0
+         
+         #Time needed for the task itself, does NOT include travel time to subtask location
+         #this is useful for things like Wait/moveForward commands
+         #for moveto commands this is 0 since the entire command is just moving to the location
+         self.taskTimeRecquired = 0.0
          
          #specific vars for this kind of subtask
          
@@ -178,43 +202,6 @@ class SubTask(Node):
         print("return the percentage done")
         return 0.0
 
-#
-#Parent class for any other kind of subClass
-#To create any other kind of subtask doSubtask and getPercentDone MUST be overwritten
-#look at moveTo for an example 
-class SubTask(Node):
-    def __init__(self, BotName, SubTaskID, TaskID):
-         #give the node a name and a namespace
-         super().__init__(str(BotName) + "_" + str(SubTaskID) + "_" + str(TaskID), namespace= f'/model/{BotName}')
-         
-         self.MovementPublisher = self.create_publisher(Twist, "cmd_vel", 10)
-         
-         #task descriptions
-         self.botName = BotName
-         self.taskID = TaskID
-         self.subTaskID = SubTaskID
-         #priority
-         self.urgency = 0
-         #whether or not this task is a part of the bots main explore task
-         self.isMainTask =  False
-         #creation time of the task, used to output deferment time
-         self.creationTime = time.time()
-         
-         #final coordinates after the subtask is finished
-         self.finishX = 0.0
-         self.finishY = 0.0
-         self.finishZ = 0.0
-         
-         #specific vars for this kind of subtask
-         
-         
-    #this method is needed, this call actually runs the subtask
-    def doSubtask(self):
-        print("Do the next subtask")
-        
-    def getPercentDone(self):
-        print("return the percentage done")
-        return 0.0
 
 #
 # Command that simply makes the robot move forward for some number of seconds
@@ -254,9 +241,11 @@ class MoveForward(SubTask):
 #### MOVE to some specified point in space ####
 #
 class MoveTo(SubTask):
-    def __init__(self, BotName, Urgency, SubTaskID, TaskID, X, Y, Speed):
+    def __init__(self, BotName, Urgency, Priority, SubTaskID, TaskID, X, Y, Speed):
     
         super().__init__(BotName, SubTaskID, TaskID)
+        #change descriptions
+        self.taskName = "MoveTo"
          
         #final coordinates after the subtask is finished
         self.finishX = X
@@ -264,9 +253,10 @@ class MoveTo(SubTask):
         self.finishZ = 0.0
         
         self.urgency = Urgency
+        self.priority = Priority
         
         #specific vars for this kind of subtask
-        self.linear_speed = float(Speed)
+        self.linear_speed = Speed
         self.angular_speed = .2#float(Speed)
         self.distance_tolerance = 1.0
     
@@ -359,8 +349,8 @@ def CreateMoveForwardTask(BotName, taskID, speed = 3.0, time = 10):
 #
 # Creates a single moveto subtask and returns it wrapped as a list
 #
-def CreateMoveToTask(BotName, urgency, taskID, X = 0, Y = 0, speed = 1.0):
-    subTaskList = [MoveTo(BotName, urgency, 0, taskID, X, Y, speed)]
+def CreateMoveToTask(BotName, urgency, priority, taskID, X = 0, Y = 0, speed = 1.0):
+    subTaskList = [MoveTo(BotName, urgency, priority, 0, taskID, X, Y, speed)]
     return (subTaskList)
     
 #
@@ -375,7 +365,7 @@ def CreateMoveToTask(BotName, urgency, taskID, X = 0, Y = 0, speed = 1.0):
 # *              
 # * * * * * * * * (X_origin, Y_Origin)
 #      Width
-def CreateExploreTasks(BotName, urgency, taskID, X_Origin, Y_Origin, X_Width, Y_Height, speed = .5):
+def CreateExploreTasks(BotName, urgency, priority, taskID, X_Origin, Y_Origin, X_Width, Y_Height, speed = .5):
     subTaskList = []
     
     increment = 1 #space between exploration points
@@ -390,8 +380,9 @@ def CreateExploreTasks(BotName, urgency, taskID, X_Origin, Y_Origin, X_Width, Y_
     
     while(Y <= Y_Height):
         while(True): #inner X loop is set up like a do while loop
-            newSubTask = MoveTo(BotName, urgency, subtaskID, taskID, X + X_Origin, Y + Y_Origin, speed)
+            newSubTask = MoveTo(BotName, urgency, priority, subtaskID, taskID, X + X_Origin, Y + Y_Origin, speed)
             newSubTask.isMainTask = True
+            newSubTask.taskName = "Explore"
             subTaskList.append(newSubTask)
             subtaskID += 1
             #move the nextSubtask one increment in the current direction
@@ -401,7 +392,7 @@ def CreateExploreTasks(BotName, urgency, taskID, X_Origin, Y_Origin, X_Width, Y_
            
         #we "skip" a row here
         Y += increment
-        newSubTask = MoveTo(BotName, urgency, subtaskID, taskID, X + X_Origin, Y + Y_Origin, speed)
+        newSubTask = MoveTo(BotName, urgency, priority, subtaskID, taskID, X + X_Origin, Y + Y_Origin, speed)
         newSubTask.isMainTask = True
         subTaskList.append(newSubTask)
         
@@ -416,15 +407,17 @@ def CreateExploreTasks(BotName, urgency, taskID, X_Origin, Y_Origin, X_Width, Y_
 ######################### NewTask ####################################
 #ALL NEW TASKS MUST BE ADDED TO THIS FUNC
 #THIS FUNC CHOOSES WHICH TASK TO CREATE BASED ON THE TASK ARGUMENT
-def NewTask(TO, URGENCY, ID, TASK, PARAMS):
+def NewTask(TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
     #Note: my version of python doesnt have match cases~Trey
     if(TASK == "moveto"):
-        return CreateMoveToTask(TO, int(URGENCY), ID, int(PARAMS[0]), int(PARAMS[1]), int(PARAMS[2]))
+        return CreateMoveToTask(TO, int(URGENCY), int(PRIORITY), ID, int(PARAMS[0]), int(PARAMS[1]), float(PARAMS[2]))
     elif(TASK == "exploreArea"):
-        return CreateExploreTasks(TO, int(URGENCY), ID, int(PARAMS[0]), int(PARAMS[1]),
+        return CreateExploreTasks(TO, int(URGENCY), int(PRIORITY), ID, int(PARAMS[0]), int(PARAMS[1]),
                                     int(PARAMS[2]), int(PARAMS[3]), float(PARAMS[4]))
               
 #this func optimizes the current subtasks, this is basically the traveling salesmen problem, uses nearest neighbor
+#optimizes the array given, helper func orderSubtasks
+#optimizes in terms of TIME
 def OptimizeSubTasks(SubTaskList, currFinalX, currFinalY):
     
     #number of nodes
@@ -432,19 +425,21 @@ def OptimizeSubTasks(SubTaskList, currFinalX, currFinalY):
     
     #number of visited nodes
     numOfVisited = 0
-    
-    #eventually, this will be time, but is distance as of ~1/14/2026 trey
-    totalTime = 0
         
     #current sub task that we are finding the nearest neighbor for
     currSubtaskIndex = 0
     
+    totalTime = 0.0
+    
     #leaving it for now, but may update this to just swap around subtasklist later
     #find nearest neighbor that isnt taken
     while(numOfVisited < dim -1):
+        #initialize for this run
         nearestNeigh = -1
+        currTime =  9e7
         
-        currDistance =  9e7
+        
+        tempTime = 0.0
         
         #get current subtask coords
         x1, y1 = currFinalX, currFinalY
@@ -454,60 +449,66 @@ def OptimizeSubTasks(SubTaskList, currFinalX, currFinalY):
         
         #look through neighbors
         for adjSubtaskIndex in range(numOfVisited, dim):
+            tempTime = 0.0
             if (currSubtaskIndex == adjSubtaskIndex):
                 continue
-            #find distance
+            #find location of adjacent task
             #since task currently being PERFORMED will NOT be in subtasklist
             x2, y2 = currFinalX, currFinalY
             if(adjSubtaskIndex != 0):
                 x2 = SubTaskList[adjSubtaskIndex -1].finishX
                 y2 = SubTaskList[adjSubtaskIndex -1].finishY
             
-            #find dis to neighbor
-            tempDistance = findDistance(x1, y1, x2, y2)
+            #if task is location based, find traveltime between currSubtask and adjacent task
+            if(SubTaskList[adjSubtaskIndex -1].locationBased == True):
+                #find dist to neighbor
+                tempDistance = findDistance(x1, y1, x2, y2)
+                if(tempDistance != 0):
+                    tempTime = SubTaskList[adjSubtaskIndex -1].linear_speed/(tempDistance)
             
-            #find the angle between the points, ~later iteration(1/14/25)
+            #add extra task time
+            tempTime += SubTaskList[adjSubtaskIndex -1].taskTimeRecquired
             
             #if new nearest neighbor is found
-            if((tempDistance < currDistance)):
-                #update distance
-                currDistance = tempDistance
+            if((tempTime < currTime)):
+                #update time
+                currTime = tempTime
                 nearestNeigh = adjSubtaskIndex
         
         #swap nearest neighbor with the next index
         SubTaskList[currSubtaskIndex], SubTaskList[nearestNeigh -1] = SubTaskList[nearestNeigh -1], SubTaskList[currSubtaskIndex]
         
         #add time
-        totalTime += currDistance 
+        totalTime += currTime
         
         currSubtaskIndex += 1
         numOfVisited += 1
         #debug
-        #for subtask in SubTaskList:
-            #print(subtask.subTaskID)
             
     return totalTime
 
-#orders subtasks based on priority AND optimization
+#orders subtasks based on Urgency, then priority, then optimization
 def orderSubtasks(SubTaskList, currFinalX, currFinalY):
     
     orderedSubtaskList = []
     
-    for urgency in range(10, -1, -1):#for level of priority
-        tempList = []#holds all of the subtasks of the current priority
-        #for each subtask
-        for subtask in SubTaskList:
-            if (subtask.urgency == urgency):#add if found
-                tempList.append(subtask)
-        
-        if(len(tempList) != 0):
-            #optimize temp list and push it onto the ordered list
-            OptimizeSubTasks(tempList, currFinalX, currFinalY)
-            orderedSubtaskList += tempList
-            
-            #update currFinal coords
-            currFinalX = tempList[-1].finishX
-            currFinalY = tempList[-1].finishY
+    for urgency in range(3, -1, -1):#for level of priority
+        for priority in range(10, -1, -1):
+    
+            tempList = []#holds all of the subtasks of the current priority
+            #for each subtask/collect subtasks that are of the current urgency and priority
+            for subtask in SubTaskList:
+                if ((subtask.urgency == urgency) and (subtask.priority == priority)):#add if found
+                    tempList.append(subtask)
+                    
+            #optimize temp list and push it onto the ordered list        
+            if(len(tempList) != 0):
+                OptimizeSubTasks(tempList, currFinalX, currFinalY)
+                orderedSubtaskList += tempList
+                
+                #update currFinal coords
+                currFinalX = tempList[-1].finishX
+                currFinalY = tempList[-1].finishY
             
     return orderedSubtaskList
             
