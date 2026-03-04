@@ -44,8 +44,8 @@ class botNode(Node):
     	#data for exploration params
         self.exploreX = explX
         self.exploreY = explY
-        self.exploreWidth = 10
-        self.exploreHeight = 10
+        self.exploreWidth = 25
+        self.exploreHeight = 25
    
     	#initialize exploration
         self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, 2, "Explore_"+ self.botName, 
@@ -62,7 +62,7 @@ class botNode(Node):
     	
     	#user interruption handling, used to check if a bot should request some interruption
         self.interruptLoad = 0.0
-        self.maxInterruptLoad = 30.0 #maximum number of user interrupts the robot will have (including current ones)
+        self.maxInterruptLoad = 10.0 #maximum number of user interrupts the robot will have (including current ones)
         self.interruptLoadDecay = 1.0 #each time a user task is done, interruptLoad is decreased by this much
     	
     	#this section is designed to run a check for tasks

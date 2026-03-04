@@ -235,8 +235,45 @@ class MoveForward(SubTask):
         while((time.time() - strTime) <= self.time):
             self.MovementPublisher.publish(cmd)
             time.sleep(.1)
-          
-          
+            
+#  
+# subtask to wait for some amount of time
+# The total time is waited in intervals of timeChunkSize
+#
+class Wait(SubTask):
+    def __init__(self, BotName, Urgency, Priority, SubTaskID, TaskID, waitTime, timeChunk = 3.0):
+    
+        super().__init__(BotName, SubTaskID, TaskID)
+        #change descriptions
+        self.taskName = "Wait"
+         
+        #final coordinates after the subtask is finished
+        self.finishX = 0.0
+        self.finishY = 0.0
+        self.finishZ = 0.0
+        
+        self.urgency = Urgency
+        self.priority = Priority
+        
+        self.isLocationBased = False
+        
+        #vars for this specific kind of subtask
+        self.timeWaited = 0.0#time that has already been waited
+        self.waitTime = waitTime#total time to be waited
+        self.timeChunkSize = timeChunk#size of each chunk of time to wait
+    
+    def doSubtask(self):
+        #wait in intervals of timezChunkSize, if time left is less than chunkSize then wait that amount of time
+        if(self.timeChunkSize <= (self.waitTime - self.timeWaited)):
+            self.MovementPublisher.publish(Twist())
+            time.sleep(self.timeChunkSize)
+            self.timeWaited += self.timeChunkSize
+            return True
+        else:#when waiting last chunk of time
+            self.MovementPublisher.publish(Twist())
+            time.sleep(self.waitTime - self.timeChunkSize)
+            return False
+            
 #
 #### MOVE to some specified point in space ####
 #
@@ -351,9 +388,17 @@ def CreateMoveForwardTask(BotName, taskID, speed = 3.0, time = 10):
 #
 def CreateMoveToTask(BotName, urgency, priority, taskID, X = 0, Y = 0, speed = 1.0):
     subTaskList = [MoveTo(BotName, urgency, priority, 0, taskID, X, Y, speed)]
-    return (subTaskList)
-    
+    return(subTaskList)
+
+
 #
+#Create a single wait subtask, returns as a list of a single subtask
+#
+def CreateWaitTask(BotName, urgency, priority, taskID, waitTime, timeChunkSize = 3.0):
+    subTaskList = [Wait(BotName, urgency, priority, 0, taskID, waitTime, timeChunk = 3.0)]
+    return(subTaskList)
+    
+#, int(URGENCY), int(PRIORITY), ID, int(PARAMS[0]), int(PARAMS[1])
 # Create a series of moveto tasks that explore a grid area
 #
 # creates a "Z" pattern of exploring some area
@@ -414,6 +459,8 @@ def NewTask(TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
     elif(TASK == "exploreArea"):
         return CreateExploreTasks(TO, int(URGENCY), int(PRIORITY), ID, int(PARAMS[0]), int(PARAMS[1]),
                                     int(PARAMS[2]), int(PARAMS[3]), float(PARAMS[4]))
+    elif(TASK == "wait"):
+        return CreateWaitTask(TO, int(URGENCY), int(PRIORITY), ID, float(PARAMS[0]), float(PARAMS[1]))
               
 #this func optimizes the current subtasks, this is basically the traveling salesmen problem, uses nearest neighbor
 #optimizes the array given, helper func orderSubtasks

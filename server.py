@@ -6,11 +6,12 @@ from Tasks import createMsgString
 
 import threading
 import Tasks
+import sys
 
 
 class ServerNode(Node):
 
-    def __init__(self):
+    def __init__(self, numOfBots):
         super().__init__('server_1')
         
         #publisher section
@@ -23,7 +24,7 @@ class ServerNode(Node):
         #self.i = 0
         
         #number of bots in the simulation
-        self.numOfBots = 2
+        self.numOfBots = numOfBots
         
         #subsriber section, listens to the bots
         self.subscription_1 = self.create_subscription(String, '/BotPublish', self.serverListener, 100)
@@ -74,8 +75,17 @@ class ServerNode(Node):
         self.publisher_.publish(msg)
 
 def main(args=None):
+    
+    numOfBots = 0
+    #get system argument for num of bots 
+    if(len(sys.argv) < 4):#if there is only one arg then no args were given in cmd
+        numOfBots = 1
+    else:
+        numOfBots= int(sys.argv[1])
+    
+    
     rclpy.init(args=args)
-    NewServerNode = ServerNode()
+    NewServerNode = ServerNode(numOfBots = numOfBots)
     rclpy.spin(NewServerNode)
 
     # Destroy the node explicitly
