@@ -1,44 +1,34 @@
 #!/usr/bin/env python3
 """
-task_metrics_logger_updated.py
+task_metrics_logger.py
 
 Single-CSV metrics logger for robot baseline subtasks + human interruptions.
 
-The node listens to:
-  1) Robot task event stream (e.g. /task_events)
-  2) Human interruption tasks (e.g. /robot1/human_task)
+This version is backward-compatible with the JSON human-task format and it can 
+also handle Lorence's keyboard publisher format:
+
+  std_msgs/String on topic 'userTopic' with msg.data like:
+    "interruption server all <urgency_num> <priority_num> <InterruptID> moveto ..."
+
+Key fix vs prior versions:
+- Task classification uses an explicit "is_priority" / "priority_interrupt" flag when present.
+- If the flag is absent, we fall back to a heuristic:
+    priority in {1,3,4,5,...} => "priority"
+    priority == 2 => urgent/non_urgent by urgency
+This matches your note that urgent/non-urgent always comes through with priority=2.
 
 CSV columns (ONLY these 10):
 
   1) robot_subtask_start_time
   2) robot_subtask_end_time
-  3) human_interrupt_generation_ts
+  3) human_interruption_generation_timestamp
   4) robot_deferring_human_request_ms
   5) task_type
-  6) attend_human_start_ts
-  7) attend_human_end_ts
+  6) timestamp_start_attending_human_request
+  7) timestamp_end_attending_human_request
   8) robot_responding_to_human_request
   9) robot_total_task_start_time
  10) robot_total_task_end_time
-
-Row write rules:
-- Baseline row is written on: baseline_task_end
-- Human interrupt row is written on: interrupt_action_end
-
-Total task start/end:
-- Start = mission_start if present; otherwise first event seen for that robot
-- End   = updated on every event; finalized on mission_end if present
-
-Pro Gamer Tip:
-  Run the logger with:
-
-  ros2 topic echo /task_events
-  ros2 topic echo /robot1/human_task
-
-  to verify that messages are being published correctly.
-
-  If the CSV file remains empty, check that both topics
-  are actively publishing messages.
 """
 
 import argparse
@@ -46,9 +36,9 @@ import csv
 import json
 import os
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional, Set, List
+from typing import Dict, Optional, Set, List, Tuple
 
 import rclpy
 from rclpy.node import Node
@@ -69,46 +59,8 @@ def safe_float(x, default=None):
         return default
 
 
-def normalize_task_type(urgency, priority) -> str:
-    """
-    Returns one of: "urgent", "non_urgent", "priority", or "".
-    Heuristics:
-      - If priority is truthy and not 0/"0"/"" -> "priority"
-      - Else if urgency is a string containing 'urgent' -> urgent/non_urgent
-      - Else if urgency is numeric: >=1 -> "urgent", 0 -> "non_urgent"
-    """
-    # priority wins
-    if priority not in ("", None):
-        # treat "0"/0 as NOT A priority
-        if isinstance(priority, str) and priority.strip() != "" and priority.strip() != "0":
-            return "priority"
-        if isinstance(priority, (int, float)) and float(priority) != 0.0:
-            return "priority"
-
-    if urgency in ("", None):
-        return ""
-
-    if isinstance(urgency, str):
-        u = urgency.strip().lower().replace("-", "").replace(" ", "")
-        if "nonurgent" in u or "non_urgent" in u:
-            return "non_urgent"
-        if "urgent" in u:
-            return "urgent"
-        # unknown string
-        return ""
-
-    # numeric urgency
-    try:
-        u = int(urgency)
-        return "urgent" if u >= 1 else "non_urgent"
-    except Exception:
-        return ""
-
-
-def truthy_baseline(val) -> Optional[bool]:
-    """
-    Parse baseline_task which might be bool/int/str. Returns True/False/None.
-    """
+def truthy_flag(val) -> Optional[bool]:
+    """Parse a flag which might be bool/int/str. Returns True/False/None."""
     if val is None or val == "":
         return None
     if isinstance(val, bool):
@@ -124,6 +76,104 @@ def truthy_baseline(val) -> Optional[bool]:
     return None
 
 
+def _normalize_urgency_value(urgency) -> Optional[int]:
+    """Return urgency as int if possible (non_urgent=0, urgent>=1)."""
+    if urgency in ("", None):
+        return None
+    if isinstance(urgency, (int, float)):
+        return int(urgency)
+    if isinstance(urgency, str):
+        u = urgency.strip().lower().replace("-", "").replace(" ", "")
+        if u == "":
+            return None
+        if "nonurgent" in u:
+            return 0
+        if "urgent" in u:
+            return 1
+        # numeric string
+        try:
+            return int(u)
+        except Exception:
+            return None
+    try:
+        return int(urgency)
+    except Exception:
+        return None
+
+
+def _normalize_priority_value(priority) -> Optional[int]:
+    if priority in ("", None):
+        return None
+    if isinstance(priority, (int, float)):
+        return int(priority)
+    if isinstance(priority, str):
+        p = priority.strip()
+        if p == "":
+            return None
+        try:
+            return int(p)
+        except Exception:
+            return None
+    try:
+        return int(priority)
+    except Exception:
+        return None
+
+
+def normalize_task_type(urgency, priority, is_priority: Optional[bool]) -> str:
+    """
+    Decide between: "urgent", "non_urgent", "priority", or "".
+
+    Precedence:
+      1) Explicit is_priority flag, if provided.
+      2) Otherwise heuristic:
+          - if priority is present and priority != 2 => "priority"
+          - else use urgency (0 => non_urgent, >=1 => urgent)
+    """
+    if is_priority is True:
+        return "priority"
+    if is_priority is False:
+        u = _normalize_urgency_value(urgency)
+        if u is None:
+            return ""
+        return "urgent" if u >= 1 else "non_urgent"
+
+    # Heuristic fallback (no flag)
+    p = _normalize_priority_value(priority)
+    if p is not None and p != 2:
+        return "priority"
+
+    u = _normalize_urgency_value(urgency)
+    if u is None:
+        return ""
+    return "urgent" if u >= 1 else "non_urgent"
+
+
+def parse_forryan_user_topic(raw: str) -> Optional[Tuple[str, str, str]]:
+    """
+    Parse Lorence keyboard publisher message.
+
+    Expected:
+      interruption server all <urgency_num> <priority_num> <InterruptID> <action...>
+
+    Returns (urgency_str, priority_str, task_id_str) or None.
+    """
+    if not isinstance(raw, str):
+        return None
+    parts = raw.strip().split()
+    if len(parts) < 6:
+        return None
+    if parts[0].lower() != "interruption":
+        return None
+    # parts[3]=urgency, parts[4]=priority, parts[5]=id  (given the scripts in ForRyan(1).zip)
+    try:
+        urgency = parts[3]
+        priority = parts[4]
+        task_id = str(parts[5])
+        return urgency, priority, task_id
+    except Exception:
+        return None
+
 # Correlation state :3
 
 @dataclass
@@ -131,20 +181,20 @@ class HumanInterrupt:
     task_id: str
     created_unix: float
     urgency: str = ""
+    priority: str = ""
+    is_priority: Optional[bool] = None
     action: str = ""
-    # optional: which robot it was targeted to, if this is known
     robot_hint: str = ""
 
 
 @dataclass
 class TaskRecord:
-    # identifiers
     robot_id: str = ""
     task_id: str = ""
 
     # robot event timestamps
-    subtask_start_unix: Optional[float] = None  # first subtask_start
-    subtask_end_unix: Optional[float] = None    # last subtask_end
+    subtask_start_unix: Optional[float] = None
+    subtask_end_unix: Optional[float] = None
     task_received_unix: Optional[float] = None
     task_start_unix: Optional[float] = None
     task_end_unix: Optional[float] = None
@@ -152,14 +202,13 @@ class TaskRecord:
     # fields to classify task
     urgency: str = ""
     priority: str = ""
+    is_priority: Optional[bool] = None
     baseline_task: Optional[bool] = None
 
-    # derived & bookkeeping
+    # bookkeeping
     is_human_task: bool = False
     finalized: bool = False
 
-
-# Main node!!!
 
 DEFAULT_COLUMNS_10 = [
     "robot_subtask_start_time",
@@ -174,12 +223,7 @@ DEFAULT_COLUMNS_10 = [
     "robot_total_task_end_time",
 ]
 
-# 3 Optional identifiers just in case?
-OPTIONAL_ID_COLUMNS = [
-    "robot_id",
-    "task_id",
-    "action",
-]
+OPTIONAL_ID_COLUMNS = ["robot_id", "task_id", "action"]
 
 
 class TaskMetricsLogger(Node):
@@ -213,7 +257,7 @@ class TaskMetricsLogger(Node):
         self.human_interrupts: Dict[str, HumanInterrupt] = {}
         self.human_task_ids: Set[str] = set()
 
-        # Task records indexed by (robot_id, task_id) and by task_id for convenience
+        # Task records indexed by robot_id::task_id
         self.records_by_key: Dict[str, TaskRecord] = {}
 
         # Ensure output directory exists
@@ -239,27 +283,76 @@ class TaskMetricsLogger(Node):
         self.get_logger().info(f"Human task topics: {', '.join(self.human_topics)}")
         self.get_logger().info(f"Writing CSV to: {self.out_csv}")
 
-    # Callbacks
+    # Da Callbacks
 
     def on_human_task(self, msg: String) -> None:
         raw = msg.data
+
+        # First try JSON (your existing pipeline)
+        data = None
         try:
             data = json.loads(raw)
-        except Exception as e:
-            self.get_logger().error(f"[human_task] Bad JSON: {e}. Raw: {raw}")
+        except Exception:
+            data = None
+
+        if isinstance(data, dict):
+            created_unix = safe_float(data.get("created_unix"), default=time.time())
+            task_id = str(data.get("task_id") or f"human_{int(created_unix*1000)}")
+            urgency = data.get("urgency", "")
+            priority = data.get("priority", "")
+            action = data.get("action", "")
+
+            # Accept several possible flag names
+            is_priority = (
+                truthy_flag(data.get("is_priority"))
+                or truthy_flag(data.get("priority_interrupt"))
+                or truthy_flag(data.get("is_priority_task"))
+            )
+            # If an explicit urgency flag exists, prefer it as "not priority"
+            urgency_interrupt = truthy_flag(data.get("urgency_interrupt"))
+            if urgency_interrupt is True:
+                is_priority = False
+
+            h = HumanInterrupt(
+                task_id=task_id,
+                created_unix=float(created_unix),
+                urgency=str(urgency) if urgency is not None else "",
+                priority=str(priority) if priority is not None else "",
+                is_priority=is_priority,
+                action=str(action) if action is not None else "",
+            )
+            self.human_interrupts[task_id] = h
+            self.human_task_ids.add(task_id)
             return
 
-        # created timestamp
-        created_unix = safe_float(data.get("created_unix"), default=time.time())
-        task_id = str(data.get("task_id") or f"human_{int(created_unix*1000)}")
-        urgency = data.get("urgency", "")
-        action = data.get("action", "")
+        # Fallback: parse ForRyan(1).zip userTopic string
+        parsed = parse_forryan_user_topic(raw)
+        if parsed is None:
+            self.get_logger().warn(f"[human_task] Unrecognized format (not JSON): {raw}")
+            return
+
+        urgency_s, priority_s, short_id = parsed
+        created_unix = time.time()
+
+        # Make task_id stable and distinct from robot task_ids if those are UUID-like
+        task_id = f"user_{short_id}"
+
+        # Lorence publisher doesn't include an explicit flag.
+        # Infer priority tasks as: priority != 2
+        pr_i = _normalize_priority_value(priority_s)
+        inferred_is_priority = (pr_i is not None and pr_i != 2)
+
+        # action payload = everything after the id token (index 6 onward)
+        parts = raw.strip().split()
+        action = " ".join(parts[6:]) if len(parts) > 6 else ""
 
         h = HumanInterrupt(
             task_id=task_id,
             created_unix=float(created_unix),
-            urgency=str(urgency) if urgency is not None else "",
-            action=str(action) if action is not None else "",
+            urgency=str(urgency_s),
+            priority=str(priority_s),
+            is_priority=inferred_is_priority,
+            action=action,
         )
         self.human_interrupts[task_id] = h
         self.human_task_ids.add(task_id)
@@ -278,16 +371,32 @@ class TaskMetricsLogger(Node):
 
         robot_id = data.get("robot") or data.get("robot_id") or ""
         event = data.get("event", "")
-        task_id = str(data.get("task_id", "") or "")
+        task_id_raw = str(data.get("task_id", "") or "")
+
+        # Some pipelines may publish user task_ids without the "user_" prefix.
+        # If we saw a human interrupt "user_<n>", accept matches to "<n>" too.
+        task_id = task_id_raw
+        if task_id_raw and f"user_{task_id_raw}" in self.human_task_ids:
+            task_id = f"user_{task_id_raw}"
+
         urgency = data.get("urgency", "")
         priority = data.get("priority", "")
-        baseline_task = truthy_baseline(data.get("baseline_task", ""))
+        baseline_task = truthy_flag(data.get("baseline_task", ""))
+
+        # flags (newer pipeline)
+        is_priority = (
+            truthy_flag(data.get("is_priority"))
+            or truthy_flag(data.get("priority_interrupt"))
+            or truthy_flag(data.get("is_priority_task"))
+        )
+        urgency_interrupt = truthy_flag(data.get("urgency_interrupt"))
+        if urgency_interrupt is True:
+            is_priority = False
 
         # Update mission start/end per robot
         if robot_id:
             if robot_id not in self.robot_start_unix:
                 self.robot_start_unix[robot_id] = float(ts_unix)
-            # mission_start overrides
             if event == "mission_start":
                 self.robot_start_unix[robot_id] = float(ts_unix)
 
@@ -295,7 +404,6 @@ class TaskMetricsLogger(Node):
             if event == "mission_end":
                 self.robot_end_unix[robot_id] = float(ts_unix)
 
-        # Ignore if no task_id; but still keep mission times
         if not task_id:
             return
 
@@ -310,13 +418,12 @@ class TaskMetricsLogger(Node):
             rec.urgency = str(urgency)
         if priority not in ("", None):
             rec.priority = str(priority)
+        if is_priority is not None:
+            rec.is_priority = is_priority
         if baseline_task is not None:
             rec.baseline_task = baseline_task
 
         # Determine if this looks like a human task
-        # - explicit from human task topic (preferred)
-        # - baseline_task False (Trey's user tasks)
-        # - task_id prefix heuristic
         if task_id in self.human_task_ids:
             rec.is_human_task = True
         elif rec.baseline_task is False:
@@ -339,17 +446,15 @@ class TaskMetricsLogger(Node):
         elif event == "task_end":
             rec.task_end_unix = float(ts_unix)
 
-        # If this is a human task and task_end is known, emit a row once (1).
+        # Emit a row once we have task_end for a human task
         if rec.is_human_task and rec.task_end_unix is not None and not rec.finalized:
             self._finalize_human_task(rec, raw_event_json=raw if self.include_raw else None)
 
     # Row building
 
     def _finalize_human_task(self, rec: TaskRecord, raw_event_json: Optional[str]) -> None:
-        # Fetch human interrupt (if seen)
         human = self.human_interrupts.get(rec.task_id)
 
-        # timestamps in ISO strings (or blank)
         robot_subtask_start = unix_to_iso(rec.subtask_start_unix) if rec.subtask_start_unix else ""
         robot_subtask_end = unix_to_iso(rec.subtask_end_unix) if rec.subtask_end_unix else ""
         human_created = unix_to_iso(human.created_unix) if human else ""
@@ -357,18 +462,17 @@ class TaskMetricsLogger(Node):
         attending_end = unix_to_iso(rec.task_end_unix) if rec.task_end_unix else ""
         robot_responding = unix_to_iso(rec.task_received_unix) if rec.task_received_unix else ""
 
-        # deferment (ms): attending_start - human_created
         defer_ms = ""
         if human and rec.task_start_unix is not None:
             defer_ms = int(round((rec.task_start_unix - human.created_unix) * 1000.0))
 
-        # task type (urgent/non_urgent/priority)
-        # prefer human urgency if robot did not provide
+        # task type
         urgency_for_type = rec.urgency if rec.urgency else (human.urgency if human else "")
-        priority_for_type = rec.priority
-        task_type = normalize_task_type(urgency_for_type, priority_for_type)
+        priority_for_type = rec.priority if rec.priority else (human.priority if human else "")
+        is_priority_for_type = rec.is_priority if rec.is_priority is not None else (human.is_priority if human else None)
 
-        # mission times
+        task_type = normalize_task_type(urgency_for_type, priority_for_type, is_priority_for_type)
+
         mission_start_iso = unix_to_iso(self.robot_start_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_start_unix else ""
         mission_end_iso = unix_to_iso(self.robot_end_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_end_unix else ""
 
@@ -425,7 +529,7 @@ def main():
         "--human-topic",
         action="append",
         default=[],
-        help="Human task topic(s) (std_msgs/String JSON). Repeatable. Default: /robot1/human_task",
+        help="Human task topic(s). Can be JSON (/robot1/human_task) and/or ForRyan keyboard publisher (userTopic). Repeatable.",
     )
     p.add_argument("--out", default=default_filename())
     p.add_argument("--include-ids", action="store_true", help="Add robot_id/task_id/action columns (in addition to the 10 categories).")
@@ -433,7 +537,8 @@ def main():
     args = p.parse_args()
 
     robot_topics = args.robot_topic if args.robot_topic else ["/task_events"]
-    human_topics = args.human_topic if args.human_topic else ["/robot1/human_task"]
+    # Default to both, so you don't have to remember which pipeline you're using.
+    human_topics = args.human_topic if args.human_topic else ["/robot1/human_task", "userTopic"]
 
     rclpy.init()
     node = TaskMetricsLogger(
