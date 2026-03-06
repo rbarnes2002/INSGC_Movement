@@ -97,7 +97,7 @@ Example structure:
 
 tasks = {
 task_id : {
-human_created_time
+human_request_time
 robot_subtask_start
 robot_subtask_end
 robot_task_start

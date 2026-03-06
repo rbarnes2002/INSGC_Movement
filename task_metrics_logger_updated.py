@@ -213,7 +213,7 @@ class TaskRecord:
 DEFAULT_COLUMNS_10 = [
     "robot_subtask_start_time",
     "robot_subtask_end_time",
-    "human_interruption_generation_timestamp",
+    "human_request_timestamp",
     "robot_deferring_human_request_ms",
     "task_type",
     "timestamp_start_attending_human_request",
@@ -479,7 +479,7 @@ class TaskMetricsLogger(Node):
         row = {
             "robot_subtask_start_time": robot_subtask_start,
             "robot_subtask_end_time": robot_subtask_end,
-            "human_interruption_generation_timestamp": human_created,
+            "human_request_timestamp": human_created,
             "robot_deferring_human_request_ms": defer_ms,
             "task_type": task_type,
             "timestamp_start_attending_human_request": attending_start,
