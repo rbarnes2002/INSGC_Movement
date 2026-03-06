@@ -14,8 +14,8 @@ class UserInput(Node):
         self.publisher_ = self.create_publisher(String, 'userTopic', 100)
         self.InterruptID = 0
         
-        self.validKeyList = ['a', 's','q']
-        self.urgency_interrupt = False; 
+        self.validKeyList = ['a', 's', 'q']
+        
         self.publishInput()
 
      
@@ -27,8 +27,8 @@ class UserInput(Node):
         
         interruption = ""
         userPrompt = ("User key options:"
-             f"\n{self.validKeyList[0]} NonUrgent Move To (-70, -63)" 
-             f"\n{self.validKeyList[1]} Urgent Move To (-40, -60)"
+             f"\n{self.validKeyList[0]} NonUrgent Wait 10 seconds" 
+             f"\n{self.validKeyList[1]} Urgent Wait 10 second"
              f"\n{self.validKeyList[2]} to quit")
              
         print(userPrompt)
@@ -38,12 +38,10 @@ class UserInput(Node):
                 keyInput = str(sys.stdin.read(1))#read one char from the input stream
                 
                 if(keyInput == self.validKeyList[0]):
-                    self.urgency_interrupt = False; 
-                    interruption = f"interruption server all 0 2 {self.InterruptID} moveto -70 -63 .6"
+                    interruption = f"interruption server all 0 2 {self.InterruptID} wait 10 4"
                 elif(keyInput == self.validKeyList[1]):
-                    self.urgency_interrupt = True; 
-                    interruption = f"interruption server all 1 2 {self.InterruptID} moveto -40 -60 .6"
-                elif(keyInput == self.validKeyList[2]):
+                    interruption = f"interruption server all 1 2 {self.InterruptID} wait 10 4"
+                elif(keyInput == self.validKeyList[5]):
                     print("Quitting..")
                     break
                 else:
@@ -59,8 +57,9 @@ class UserInput(Node):
                 self.publisher_.publish(msg)
                 #self.get_logger().info(msg.data)
         finally:
-            termios.tcsetattr(fileDesc, termios.TCSADRAIN, restoreTerminal)
             #restore terminal
+            termios.tcsetattr(fileDesc, termios.TCSADRAIN, restoreTerminal)
+            
              
          
 def main(args=None):
