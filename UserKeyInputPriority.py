@@ -14,8 +14,8 @@ class UserInput(Node):
         self.publisher_ = self.create_publisher(String, 'userTopic', 100)
         self.InterruptID = 0
         
-        self.validKeyList = ['a', 's', 'd', 'f','g', 'q']
-        
+        self.validKeyList = ['a', 's', 'd', 'f', 'g', 'q']
+        self.priority_interrupt = False; 
         self.publishInput()
 
      
@@ -27,11 +27,11 @@ class UserInput(Node):
         
         interruption = ""
         userPrompt = ("User key options:"
-             f"\n{self.validKeyList[0]} Priority 1 Wait 10 seconds" 
-             f"\n{self.validKeyList[1]} Priority 2 Wait 10 second"
-             f"\n{self.validKeyList[2]} Priority 3 Wait 10 second"
-             f"\n{self.validKeyList[3]} Priority 4 Wait 10 second"
-             f"\n{self.validKeyList[4]} Priority 5 Wait 10 second"
+             f"\n{self.validKeyList[0]} Priority 1 Move To (-30, -45)" 
+             f"\n{self.validKeyList[1]} Priority 2 Move To (-10, -40)"
+             f"\n{self.validKeyList[2]} Priority 3 Move To (-20, -55)"
+             f"\n{self.validKeyList[3]} Priority 4 Move To (-20, -50)"
+             f"\n{self.validKeyList[4]} Priority 5 Move To (-70, -45)"
              f"\n{self.validKeyList[5]} to quit")
              
         print(userPrompt)
@@ -39,17 +39,22 @@ class UserInput(Node):
             tty.setraw(fileDesc)#set terminal to raw mode, disables line buffering
             while(True):
                 keyInput = str(sys.stdin.read(1))#read one char from the input stream
-                
+                self.priority_interrupt=True;
                 if(keyInput == self.validKeyList[0]):
-                    interruption = f"interruption server all 0 1 {self.InterruptID} wait 10 4"
+                    self.priority_interrupt = True;
+                    interruption = f"interruption server all 1 1 {self.InterruptID} moveto -30 -45 .6"
                 elif(keyInput == self.validKeyList[1]):
-                    interruption = f"interruption server all 0 2 {self.InterruptID} wait 10 4"
+                    self.priority_interrupt = True;
+                    interruption = f"interruption server all 1 2 {self.InterruptID} moveto -10 -40 .6"
                 elif(keyInput == self.validKeyList[2]):
-                    interruption = f"interruption server all 0 3 {self.InterruptID} wait 10 4"
+                    self.priority_interrupt = True;
+                    interruption = f"interruption server all 1 3 {self.InterruptID} moveto -20 -55 .6"
                 elif(keyInput == self.validKeyList[3]):
-                    interruption = f"interruption server all 0 4 {self.InterruptID} wait 10 4"
+                    self.priority_interrupt = True;
+                    interruption = f"interruption server all 1 4 {self.InterruptID} moveto -20 -50 .6"
                 elif(keyInput == self.validKeyList[4]):
-                    interruption = f"interruption server all 0 5 {self.InterruptID} wait 10 4"
+                    self.priority_interrupt = True;
+                    interruption = f"interruption server all 1 5 {self.InterruptID} moveto -70 -45 .6"
                 elif(keyInput == self.validKeyList[5]):
                     print("Quitting..")
                     break
@@ -66,9 +71,8 @@ class UserInput(Node):
                 self.publisher_.publish(msg)
                 #self.get_logger().info(msg.data)
         finally:
-            #restore terminal
             termios.tcsetattr(fileDesc, termios.TCSADRAIN, restoreTerminal)
-            
+            #restore terminal
              
          
 def main(args=None):
