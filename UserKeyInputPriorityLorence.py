@@ -15,7 +15,6 @@ class UserInput(Node):
         self.InterruptID = 0
         
         self.validKeyList = ['a', 's', 'd', 'f', 'g', 'q']
-        self.priority_interrupt = False; 
         self.publishInput()
 
      
@@ -39,21 +38,15 @@ class UserInput(Node):
             tty.setraw(fileDesc)#set terminal to raw mode, disables line buffering
             while(True):
                 keyInput = str(sys.stdin.read(1))#read one char from the input stream
-                self.priority_interrupt=True;
                 if(keyInput == self.validKeyList[0]):
-                    self.priority_interrupt = True;
                     interruption = f"interruption server all 1 1 {self.InterruptID} moveto -30 -45 .6"
                 elif(keyInput == self.validKeyList[1]):
-                    self.priority_interrupt = True;
                     interruption = f"interruption server all 1 2 {self.InterruptID} moveto -10 -40 .6"
                 elif(keyInput == self.validKeyList[2]):
-                    self.priority_interrupt = True;
                     interruption = f"interruption server all 1 3 {self.InterruptID} moveto -20 -55 .6"
                 elif(keyInput == self.validKeyList[3]):
-                    self.priority_interrupt = True;
                     interruption = f"interruption server all 1 4 {self.InterruptID} moveto -20 -50 .6"
                 elif(keyInput == self.validKeyList[4]):
-                    self.priority_interrupt = True;
                     interruption = f"interruption server all 1 5 {self.InterruptID} moveto -70 -45 .6"
                 elif(keyInput == self.validKeyList[5]):
                     print("Quitting..")
