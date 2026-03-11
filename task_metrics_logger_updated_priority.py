@@ -1,34 +1,17 @@
 #!/usr/bin/env python3
 """
-task_metrics_logger.py
-
-Single-CSV metrics logger for robot baseline subtasks + human interruptions.
-
-This version is backward-compatible with the JSON human-task format and it can 
-also handle Lorence's keyboard publisher format:
-
-  std_msgs/String on topic 'userTopic' with msg.data like:
-    "interruption server all <urgency_num> <priority_num> <InterruptID> moveto ..."
-
-Key fix vs prior versions:
-- Task classification uses an explicit "is_priority" / "priority_interrupt" flag when present.
-- If the flag is absent, we fall back to a heuristic:
-    priority in {1,3,4,5,...} => "priority"
-    priority == 2 => urgent/non_urgent by urgency
-This matches your note that urgent/non-urgent always comes through with priority=2.
-
 CSV columns (ONLY these 10):
-
-  1) robot_subtask_start_time
-  2) robot_subtask_end_time
-  3) human_interruption_generation_timestamp
-  4) robot_deferring_human_request_ms
-  5) task_type
-  6) timestamp_start_attending_human_request
-  7) timestamp_end_attending_human_request
-  8) robot_responding_to_human_request
-  9) robot_total_task_start_time
- 10) robot_total_task_end_time
+  1) robot_id
+  2) robot_subtask_start_time
+  3) robot_subtask_end_time
+  4) human_interruption_generation_timestamp
+  5) robot_deferring_human_request_ms
+  6) task_type
+  7) timestamp_start_attending_human_request
+  8) timestamp_end_attending_human_request
+  9) robot_receiving_human_request
+  10) robot_total_task_start_time
+  11) robot_total_task_end_time
 """
 
 import argparse
@@ -123,12 +106,6 @@ def _normalize_priority_value(priority) -> Optional[int]:
 def normalize_task_type(urgency, priority, is_priority: Optional[bool]) -> str:
     """
     Decide between: "urgent", "non_urgent", "priority", or "".
-
-    Precedence:
-      1) Explicit is_priority flag, if provided.
-      2) Otherwise heuristic:
-          - if priority is present and priority != 2 => "priority"
-          - else use urgency (0 => non_urgent, >=1 => urgent)
     """
     if is_priority is True:
         return "priority"
@@ -165,7 +142,7 @@ def parse_forryan_user_topic(raw: str) -> Optional[Tuple[str, str, str]]:
         return None
     if parts[0].lower() != "interruption":
         return None
-    # parts[3]=urgency, parts[4]=priority, parts[5]=id  (given the scripts in ForRyan(1).zip)
+ 
     try:
         urgency = parts[3]
         priority = parts[4]
@@ -210,7 +187,8 @@ class TaskRecord:
     finalized: bool = False
 
 
-DEFAULT_COLUMNS_10 = [
+DEFAULT_COLUMNS = [
+    "robot_id",
     "robot_subtask_start_time",
     "robot_subtask_end_time",
     "human_request_timestamp",
@@ -218,7 +196,7 @@ DEFAULT_COLUMNS_10 = [
     "task_type",
     "timestamp_start_attending_human_request",
     "timestamp_end_attending_human_request",
-    "robot_responding_to_human_request",
+    "robot_receiving_human_request",
     "robot_total_task_start_time",
     "robot_total_task_end_time",
 ]
@@ -243,7 +221,7 @@ class TaskMetricsLogger(Node):
         self.include_ids = include_ids
         self.include_raw = include_raw
 
-        self.columns = list(DEFAULT_COLUMNS_10)
+        self.columns = list(DEFAULT_COLUMNS)
         if self.include_ids:
             self.columns = OPTIONAL_ID_COLUMNS + self.columns
         if self.include_raw:
@@ -288,7 +266,7 @@ class TaskMetricsLogger(Node):
     def on_human_task(self, msg: String) -> None:
         raw = msg.data
 
-        # First try JSON (your existing pipeline)
+        # First try JSON 
         data = None
         try:
             data = json.loads(raw)
@@ -460,7 +438,7 @@ class TaskMetricsLogger(Node):
         human_created = unix_to_iso(human.created_unix) if human else ""
         attending_start = unix_to_iso(rec.task_start_unix) if rec.task_start_unix else ""
         attending_end = unix_to_iso(rec.task_end_unix) if rec.task_end_unix else ""
-        robot_responding = unix_to_iso(rec.task_received_unix) if rec.task_received_unix else ""
+        robot_receiving = unix_to_iso(rec.task_received_unix) if rec.task_received_unix else ""
 
         defer_ms = ""
         if human and rec.task_start_unix is not None:
@@ -481,6 +459,7 @@ class TaskMetricsLogger(Node):
         mission_end_iso = unix_to_iso(self.robot_end_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_end_unix else ""
 
         row = {
+            "robot_id": rec.robot_id,
             "robot_subtask_start_time": robot_subtask_start,
             "robot_subtask_end_time": robot_subtask_end,
             "human_request_timestamp": human_created,
@@ -488,7 +467,7 @@ class TaskMetricsLogger(Node):
             "task_type": task_type,
             "timestamp_start_attending_human_request": attending_start,
             "timestamp_end_attending_human_request": attending_end,
-            "robot_responding_to_human_request": robot_responding,
+            "robot_receiving_human_request": robot_receiving,
             "robot_total_task_start_time": mission_start_iso,
             "robot_total_task_end_time": mission_end_iso,
         }
