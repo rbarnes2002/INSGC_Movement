@@ -50,7 +50,7 @@ class ServerNode(Node):
                         
                 #if "request" or "ignore"
                 interrupt[4] += 1 #increment the amount of responses
-                if(interrupt[4] >= self.numOfBots):#if there have been enough responses
+                if(interrupt[4] >= interrupt[5]):#if there have been enough responses
                     #create accept string
                     #message values, 
                     TYPEint, FROMint, TOint, URGENCYint, PRIORITYint, IDint, TASKint, PARAMSint = Tasks.ParseMsg(interrupt[1])
@@ -69,8 +69,14 @@ class ServerNode(Node):
     #addresses user input, 
     def addressUserInput(self, msg):
         msgFields = msg.data.split(" ")
-        #adds interruption ID to list, note format: ID, msg, minimumDistance, botname, #of requests to hear
-        self.listOfInterrupts.append([msgFields[5], msg.data, float(9e7), "botname", 0])
+        
+        requestsToHear = self.numOfBots
+        #if the interrupt was sent to a specific bot
+        if(msgFields[2] != "all"):
+            requestsToHear = 1
+        
+        #adds interruption ID to list, note format: ID, msg, minimumDistance, botname, #of requests heard, #of requests to hear 
+        self.listOfInterrupts.append([msgFields[5], msg.data, float(9e7), "botname", 0, requestsToHear])
         self.get_logger().info(msg.data)
         self.publisher_.publish(msg)
 
