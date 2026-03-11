@@ -1,0 +1,24 @@
+source /opt/ros/jazzy/setup.bash
+cd ~/Desktop
+chmod +x task_metrics_logger_updated_priority.py
+python3 task_metrics_logger_updated_priority.py \
+  --robot-topic /task_events \
+  --human-topic /userTopic \
+  --out ~/Desktop/task_metrics.csv
+  
+source /opt/ros/jazzy/setup.bash
+cd ~/Desktop
+chmod +x task_metrics_logger_updated_urgency.py
+python3 task_metrics_logger_updated_urgency.py \
+  --robot-topic /task_events \
+  --human-topic /userTopic \
+  --out ~/Desktop/task_metrics.csv
+  
+source /opt/ros/jazzy/setup.bash
+cd ~/Desktop
+chmod +x task_metrics_logger_updated_merged.py
+python3 task_metrics_logger_updated_merged.py \
+  --robot-topic /task_events \
+  --human-topic /userTopic \
+  --out ~/Desktop/task_metrics.csv
+
