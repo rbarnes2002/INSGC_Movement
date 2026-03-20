@@ -214,7 +214,8 @@ class TaskMetricsLogger(Node):
         include_raw: bool,
     ):
         super().__init__("task_metrics_logger")
-
+        self.completed_human_rows_by_robot: Dict[str, List[dict]] = {}
+        self.all_rows_in_order: List[dict] = []
         self.robot_topics = robot_topics
         self.human_topics = human_topics
         self.out_csv = out_csv
@@ -424,12 +425,83 @@ class TaskMetricsLogger(Node):
         elif event == "task_end":
             rec.task_end_unix = float(ts_unix)
 
-        # Emit a row once we have task_end for a human task
         if rec.is_human_task and rec.task_end_unix is not None and not rec.finalized:
-            self._finalize_human_task(rec, raw_event_json=raw if self.include_raw else None)
-
+            self._store_human_task_row(rec, raw_event_json=raw if self.include_raw else None)
+            self._update_robot_total_end_for_all_rows(robot_id)
+            rec.finalized = True
+            
+    def _rewrite_csv(self) -> None:
+        self.f.close()
+        self.f = open(self.out_csv, "w", newline="")
+        self.writer = csv.DictWriter(self.f, fieldnames=self.columns)
+        self.writer.writeheader()
+        for row in self.all_rows_in_order:
+            self.writer.writerow(row)
+        self.f.flush()        
+        
+    def _update_robot_total_end_for_all_rows(self, robot_id: str) -> None:
+        latest_end_iso = unix_to_iso(self.robot_end_unix.get(robot_id, 0.0)) if robot_id in self.robot_end_unix else ""
+        for row in self.completed_human_rows_by_robot.get(robot_id, []):
+            row["robot_total_task_end_time"] = latest_end_iso
+        self._rewrite_csv()
+        
+    def _store_human_task_row(self, rec: TaskRecord, raw_event_json: Optional[str]) -> None:
+        row = self._build_human_task_row(rec, raw_event_json)
+        self.completed_human_rows_by_robot.setdefault(rec.robot_id, []).append(row)
+        self.all_rows_in_order.append(row)
+        self._rewrite_csv()
+        
     # Row building
+    def _build_human_task_row(self, rec: TaskRecord, raw_event_json: Optional[str]) -> dict:
+        human = self.human_interrupts.get(rec.task_id)
 
+        robot_subtask_start = unix_to_iso(rec.subtask_start_unix) if rec.subtask_start_unix else ""
+        robot_subtask_end = unix_to_iso(rec.subtask_end_unix) if rec.subtask_end_unix else ""
+        human_created = unix_to_iso(human.created_unix) if human else ""
+        attending_start = unix_to_iso(rec.task_start_unix) if rec.task_start_unix else ""
+        attending_end = unix_to_iso(rec.task_end_unix) if rec.task_end_unix else ""
+        robot_receiving = unix_to_iso(rec.task_received_unix) if rec.task_received_unix else ""
+
+        defer_ms = ""
+        if human and rec.task_start_unix is not None:
+            defer_ms = int(round((rec.task_start_unix - human.created_unix) * 1000.0))
+
+        urgency_for_type = rec.urgency if rec.urgency else (human.urgency if human else "")
+        priority_for_type = rec.priority if rec.priority else (human.priority if human else "")
+        is_priority_for_type = rec.is_priority if rec.is_priority is not None else (human.is_priority if human else None)
+
+        task_type = normalize_task_type(urgency_for_type, priority_for_type, is_priority_for_type)
+        if task_type == "priority" and priority_for_type not in ("", None):
+            task_type = f"priority {priority_for_type}"
+        mission_start_iso = unix_to_iso(self.robot_start_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_start_unix else ""
+        mission_end_iso = unix_to_iso(self.robot_end_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_end_unix else ""
+
+        row = {
+            "robot_id": rec.robot_id,
+            "robot_subtask_start_time": robot_subtask_start,
+            "robot_subtask_end_time": robot_subtask_end,
+            "human_request_timestamp": human_created,
+            "robot_deferring_human_request_ms": defer_ms,
+            "task_type": task_type,
+            "timestamp_start_attending_human_request": attending_start,
+            "timestamp_end_attending_human_request": attending_end,
+            "robot_receiving_human_request": robot_receiving,
+            "robot_total_task_start_time": mission_start_iso,
+            "robot_total_task_end_time": mission_end_iso,
+        }
+
+        if self.include_ids:
+            row = {
+                "robot_id": rec.robot_id,
+                "task_id": rec.task_id,
+                "action": (human.action if human else ""),
+                **row,
+            }
+
+        if self.include_raw and raw_event_json is not None:
+            row["raw_event_json"] = raw_event_json
+
+        return row
     def _finalize_human_task(self, rec: TaskRecord, raw_event_json: Optional[str]) -> None:
         human = self.human_interrupts.get(rec.task_id)
 
@@ -450,10 +522,6 @@ class TaskMetricsLogger(Node):
         is_priority_for_type = rec.is_priority if rec.is_priority is not None else (human.is_priority if human else None)
 
         task_type = normalize_task_type(urgency_for_type, priority_for_type, is_priority_for_type)
-
-    # If it is a priority task, show the priority number instead
-        if task_type == "priority" and priority_for_type not in ("", None):
-            task_type = f"priority {priority_for_type}"
 
         mission_start_iso = unix_to_iso(self.robot_start_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_start_unix else ""
         mission_end_iso = unix_to_iso(self.robot_end_unix.get(rec.robot_id, 0.0)) if rec.robot_id in self.robot_end_unix else ""
