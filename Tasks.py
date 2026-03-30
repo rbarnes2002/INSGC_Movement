@@ -126,7 +126,8 @@ def get_pose(MODEL_NAME):
         ).strip()
         parts = re.split(r'[ ,\[\]]', out)
         if len(parts) != 45:
-        #print(f"{MODEL_NAME} {parts}") #debug
+            print(f"{MODEL_NAME} {parts}") #debug
+            print("Gazebo No RESPOND")
             return None
         #x, y, z, roll, pitch, yaw = map(float, parts)
         x, y, z = float(parts[33]), float(parts[34]), float(parts[35])
@@ -139,7 +140,15 @@ def get_pose(MODEL_NAME):
     except FileNotFoundError:
         print("gz command not found")
         return None
+        
+#gurantees a pose is returned
+def getPoseHelper(MODEL_NAME):
+    while(True):
+        pose = get_pose(MODEL_NAME)
+        if(pose != None):
+             return pose
 
+   
 ######################### SUBTASK SECTION ####################################
 #define objects as children of the subtasks class
 
@@ -194,7 +203,7 @@ class SubTask(Node):
          
          
     #this method is needed, this call actually runs the subtask
-    def doSubtask(self):
+    def doSubtask(self, botLocObj = None):
         print("Do the next subtask")
         return False
         
@@ -259,19 +268,19 @@ class Wait(SubTask):
         
         #vars for this specific kind of subtask
         self.timeWaited = 0.0#time that has already been waited
-        self.waitTime = waitTime#total time to be waited
+        self.taskTimeRecquired = waitTime#total time to be waited
         self.timeChunkSize = timeChunk#size of each chunk of time to wait
     
-    def doSubtask(self):
-        #wait in intervals of timezChunkSize, if time left is less than chunkSize then wait that amount of time
-        if(self.timeChunkSize <= (self.waitTime - self.timeWaited)):
+    def doSubtask(self, botLocObj = None):
+        #wait in intervals f timezChunkSize, if time left is less than chunkSize then wait that amount of time
+        if(self.timeChunkSize <= (self.taskTimeRecquired - self.timeWaited)):
             self.MovementPublisher.publish(Twist())
             time.sleep(self.timeChunkSize)
             self.timeWaited += self.timeChunkSize
             return True
         else:#when waiting last chunk of time
             self.MovementPublisher.publish(Twist())
-            time.sleep(self.waitTime - self.timeChunkSize)
+            time.sleep(self.taskTimeRecquired - self.timeChunkSize)
             return False
             
 #
@@ -298,15 +307,21 @@ class MoveTo(SubTask):
         self.distance_tolerance = 1.0
     
     #much of this code was taken from Riley's "move_to_point.py" func "control_loop"
-    def doSubtask(self):
-            pose = get_pose(self.botName)
-            if pose is None:
-                #self.get_logger().warn("Could not read Husky pose.")
-                #return
-                self.MovementPublisher.publish(Twist())
-                return True
-
-            x, y, z, yaw = pose
+    def doSubtask(self, botLocObj = None):
+            
+            x = 0.0
+            y = 0.0
+            z = 0.0 
+            yaw = 0.0
+            roll = 0.0
+            pitch = 0.0
+            #botLocObj = None
+            
+            if(botLocObj != None):
+                x, y, z, roll, pitch, yaw = botLocObj.get()
+            else:
+                pose = getPoseHelper(self.botName)
+                x, y, z, yaw = pose
             
             # Distance to target
             dx = self.finishX - x
@@ -405,7 +420,7 @@ def CreateWaitTask(BotName, urgency, priority, taskID, waitTime, timeChunkSize =
 # * * * * * * * * 
 # *
 # * * * * * * * *
-#               *   Height
+#                 *   Height
 # * * * * * * * * 
 # *              
 # * * * * * * * * (X_origin, Y_Origin)

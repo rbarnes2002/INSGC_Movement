@@ -17,7 +17,7 @@ class UserInput(Node):
         
         self.numOfBots = numOfBots
         
-        self.validKeyList = ['a', 's', 'd', 'f','g', 'q']
+        self.validKeyList = ['a', 's', 'q']
         
         self.fileDesc = sys.stdin.fileno()#gets file descriptor of input
         self.restoreTerminal = termios.tcgetattr(self.fileDesc)#save terminal configs/restore later
@@ -29,37 +29,27 @@ class UserInput(Node):
     def publishInput(self):
         
         #prints to user, also sets terminal to raw mode on its way out
-        self.printToUser("Please press one of the listed keys to choose a priority, and then press a numbered key to select which bot to send it to.")
-        priority = ""
-        priorityPrompt = ("Priority key options:"
-             f"\n{self.validKeyList[0]} Priority 1 Wait 3 seconds" 
-             f"\n{self.validKeyList[1]} Priority 2 Wait 3 second"
-             f"\n{self.validKeyList[2]} Priority 3 Wait 3 second"
-             f"\n{self.validKeyList[3]} Priority 4 Wait 3 second"
-             f"\n{self.validKeyList[4]} Priority 5 Wait 3 second"
-             f"\n{self.validKeyList[5]} to quit")
+        self.printToUser("Please press one of the listed keys to choose either urgent or nonurgent, and then press a numbered key to select which bot to send it to.")
+        urgency = ""
+        urgencyPrompt = ("Urgent key options:"
+             f"\n{self.validKeyList[0]} NonUrgent Wait 3 seconds" 
+             f"\n{self.validKeyList[1]} Urgent Wait 3 second"
+             f"\n{self.validKeyList[2]} to quit")
         
         #displays what bot numbers are available for the user to press
         botPrompt = f"Press key 1 through {self.numOfBots} to select a bot"
         
-        
         try:
             while(True):
-                self.printToUser(priorityPrompt)
+                self.printToUser(urgencyPrompt)
                 #choose priority level
                 keyInput = str(sys.stdin.read(1))#read one char from the input stream
                 
                 if(keyInput == self.validKeyList[0]):
-                    priority = "1"
+                    urgency = "0"
                 elif(keyInput == self.validKeyList[1]):
-                    priority = "2"
+                    urgency = "1"
                 elif(keyInput == self.validKeyList[2]):
-                    priority = "3"
-                elif(keyInput == self.validKeyList[3]):
-                    priority = "4"
-                elif(keyInput == self.validKeyList[4]):
-                    priority = "5"
-                elif(keyInput == self.validKeyList[5]):
                     self.printToUser("Quitting..")
                     break
                 else:
@@ -72,7 +62,7 @@ class UserInput(Node):
             
                 #create and publish message
                 msg = String()
-                msg.data = f"interruption server robot{robotID} 0 {priority} {self.InterruptID} wait 3 2"
+                msg.data = f"interruption server robot{robotID} {urgency} 0 {self.InterruptID} wait 3 2"
                 self.InterruptID += 1
 
                 self.publisher_.publish(msg)
@@ -96,10 +86,11 @@ class UserInput(Node):
                 if((keyBotInput >= 0) and (keyBotInput <= self.numOfBots)):
                     return keyBotInput
             
-                #if outside range of bots 
+                #if outside range of bots
                 self.printToUser("Number does not correlate to a robot!\n" + botPrompt)
             except ValueError as e:
                 self.printToUser("Please enter a Number!")
+
   
   
     #in order to properly print to the user, the terminal must be restored, and then set back to whitespaceless mode

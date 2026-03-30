@@ -26,12 +26,19 @@ class ServerNode(Node):
         #number of bots in the simulation
         self.numOfBots = numOfBots
         
+        #number of interrupts that have been sent to the bots and have NOT been given to a bot
+        self.numActiveInterrupts= 0
+        self.maxActiveInterrupts = 1#max number of active interrupts 
+        
         #subsriber section, listens to the bots
         self.subscription_1 = self.create_subscription(String, '/BotPublish', self.serverListener, 100)
         
         #listens to the user
         self.subscription_2 = self.create_subscription(String, 'userTopic', self.addressUserInput, 100)
         
+        #self.checkInterruptTimer = self.create_timer(.5, self.sendInterruption)
+        
+        #holds all interruptions not yet given out to the bots
         self.listOfInterrupts = []
         
         
@@ -50,7 +57,7 @@ class ServerNode(Node):
                         
                 #if "request" or "ignore"
                 interrupt[4] += 1 #increment the amount of responses
-                if(interrupt[4] >= interrupt[5]):#if there have been enough responses
+                if(interrupt[4] >= interrupt[5] and interrupt[3] != "botname"):#if there have been enough responses
                     #create accept string
                     #message values, 
                     TYPEint, FROMint, TOint, URGENCYint, PRIORITYint, IDint, TASKint, PARAMSint = Tasks.ParseMsg(interrupt[1])
@@ -60,12 +67,21 @@ class ServerNode(Node):
                     newMsg.data = msgString
                     #remove from list of pending interruption
                     self.listOfInterrupts.remove(interrupt)
+                    
+                    #one less "active" interrupt
+                    self.numActiveInterrupts -= 1
                    
                     #publish new response accepting 
                     self.publisher_.publish(newMsg)
                     self.get_logger().info(msgString)
+                    
+                    #sends the next interrupt
+                    self.sendInterruption()
+                    
+                else:
+                    break
             
-     
+            
     #addresses user input, 
     def addressUserInput(self, msg):
         msgFields = msg.data.split(" ")
@@ -78,13 +94,27 @@ class ServerNode(Node):
         #adds interruption ID to list, note format: ID, msg, minimumDistance, botname, #of requests heard, #of requests to hear 
         self.listOfInterrupts.append([msgFields[5], msg.data, float(9e7), "botname", 0, requestsToHear])
         self.get_logger().info(msg.data)
-        self.publisher_.publish(msg)
+        #self.publisher_.publish(msg)
+        
+        #attempt to send this interruption
+        self.sendInterruption()
+        
+      
+    #sends an interrupt 
+    def sendInterruption(self):
+        if(self.numActiveInterrupts < self.maxActiveInterrupts):
+            #send interrupt
+            if(len(self.listOfInterrupts) > self.numActiveInterrupts ):#if there is an interrupt to send
+                botsMSG = String()             
+                botsMSG.data = self.listOfInterrupts[self.numActiveInterrupts][1]
+                self.publisher_.publish(botsMSG)
+                self.numActiveInterrupts += 1
 
 def main(args=None):
     
     numOfBots = 0
     #get system argument for num of bots 
-    if(len(sys.argv) < 4):#if there is only one arg then no args were given in cmd
+    if(len(sys.argv) < 2):#if there is only one arg then no args were given in cmd
         numOfBots = 1
     else:
         numOfBots= int(sys.argv[1])

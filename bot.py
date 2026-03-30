@@ -3,18 +3,19 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 
 from std_msgs.msg import String
-
+from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
-
+#import tf_transformations.euler_from_quaternion
 import copy
-
 import time
-
 import sys
 import threading
 import Tasks
-
 import json
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, Duration
+import math
+
 
 class botNode(Node):
 
@@ -31,7 +32,24 @@ class botNode(Node):
                 callback_group = self.botListenerCallBackGroup)
     	        
         self.subscription  # prevent unused variable warning
-    	
+        
+        
+        #quality of service profile
+        qos_Profile = QoSProfile(reliability=ReliabilityPolicy.RELIABLE,
+                                                history=HistoryPolicy.KEEP_LAST,
+                                                depth = 10,
+                                                lifespan = Duration(seconds = 10))
+        
+        self.poseCallBackGroup = MutuallyExclusiveCallbackGroup()
+        #listens to gazebos odom for bot position
+        self.poseSubscription = self.create_subscription(PoseStamped, 
+                                                                               f"/model/{botString}/pose",
+                                                                               self.UpdateBotLocation,
+                                                                               qos_Profile,
+                                                                               callback_group = self.poseCallBackGroup)
+        self.poseSubscription
+        
+        
     	#publisher section
         self.publisher_ = self.create_publisher(String, '/BotPublish', 100) 
         
@@ -44,15 +62,23 @@ class botNode(Node):
     	#data for exploration params
         self.exploreX = explX
         self.exploreY = explY
-        self.exploreWidth = 25
-        self.exploreHeight = 25
+        self.exploreWidth = 3
+        self.exploreHeight = 3
    
     	#initialize exploration
-        self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, 2, "Explore_"+ self.botName, 
-                                                    self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
+        self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, 1, "Explore_"+ self.botName, 
+                                                  self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
         
         #task tracker for the main explore task
         self.listOfTaskTrackers = [Tasks.taskTracker(taskID = "Explore_" + self.botName, numOfSubtasks = len(self.listOfTasks))]
+        
+        #odometry of the bot
+        self.BotLocation = botLocation()
+        
+        #get pose
+        x, y, z, yaw = Tasks.getPoseHelper(botString)
+        #optimize explore
+        self.listOfTasks = Tasks.orderSubtasks(self.listOfTasks, x, y)
                                    
         self.currSubtask = self.listOfTasks.pop(0)#current subtask being done
         #the coords at the end of the current subtask
@@ -83,7 +109,6 @@ class botNode(Node):
      
     #handles whether or not to send a request(to handle some interruption) and sending the request itself
     def requestHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
-        #msgFields = msg.data.split(" ")
         #check who the interruption is for
         NewMsg = String()#new message
         if((TO == self.botName) or (TO == "all")):
@@ -100,7 +125,7 @@ class botNode(Node):
                 copyOfTasks = Tasks.orderSubtasks(copyOfTasks, self.currFinalX, self.currFinalY)
                 
                 time = self.TimeUntilSubtask(copyOfTasks, ID, 0)
-               
+                
                 #create a request for the interruption, swap to and from
                 NewMsg.data = Tasks.createMsgString(TYPE = "request", FROM = self.botName, TO = FROM, URGENCY = "", PRIORITY = "",
                                                     ID = ID, TASK = TASK, PARAMS = [str(time)])
@@ -200,7 +225,7 @@ class botNode(Node):
                     self.checkForNewTaskStart()
 
             #do subtask, use subtaskNotFinished to determine if task needs to be continued
-            subtaskNotFinished = self.currSubtask.doSubtask()
+            subtaskNotFinished = self.currSubtask.doSubtask(self.BotLocation)
             time.sleep(.3)
         
         #after finished, delete subtask and output message
@@ -262,13 +287,9 @@ class botNode(Node):
     def TimeUntilSubtask(self, subtaskList, taskID, subTaskID):
         totalTime = 0.0
         
-        prevX, prevY, z, prevYaw, = 0.0, 0.0, 0.0, 0.0
         #get the pose
-        while(True):
-            pose = Tasks.get_pose(self.botName)
-            if(pose is not(None)):
-                prevX, prevY, z, prevYaw = pose
-                break
+        prevX, prevY, prevZ, prevRoll, prevPitch, prevYaw = self.BotLocation.get()
+
         #get distance between robots current position and the final location of the current subtask
         #time = velocity/distance
         distance = Tasks.findDistance(self.currFinalX, self.currFinalY, prevX, prevY)
@@ -293,7 +314,57 @@ class botNode(Node):
             #task time is added after since this func aims to find the time until the task can be STARTED
             #not COMPLETED
             totalTime += subtask.taskTimeRecquired
+            
+            
+    #when getting an update from gazebo, update when 
+    def UpdateBotLocation(self, poseMsg):
+        self.BotLocation.update(poseMsg)
+       
+            
+#this object keeps track of the robots odometry, updated inside of botNode
+class botLocation():
+    def __init__(self):
+        #current positon of the robot
+        self.X = 0.0
+        self.Y = 0.0
+        self.Z = 0.0
         
+        #rotation
+        self.Roll = 0.0
+        self.Pitch = 0.0
+        self.Yaw = 0.0
+        
+        #prevent race conditon between reading odom and updating it
+        self.odomLock = threading.Lock()
+    
+    def update(self, poseMsg):
+        newPos = poseMsg.pose.position
+        newOrient = poseMsg.pose.orientation
+        
+        tempRoll = math.atan2(2*(newOrient.w * newOrient.x + newOrient.y*newOrient.z), 1 - 2*(newOrient.x**2 + newOrient.y**2))
+        tempPitch = math.asin(2*(newOrient.w *newOrient.y - newOrient.z*newOrient.x))
+        tempYaw = math.atan2(2*(newOrient.w*newOrient.z + newOrient.x*newOrient.y), 1 - 2*(newOrient.y**2 + newOrient.z**2))
+        
+        with self.odomLock:
+            self.X = newPos.x
+            self.Y = newPos.y
+            self.Z = newPos.z
+            
+            self.Roll = tempRoll
+            self.Pitch = tempPitch
+            self.Yaw =  tempYaw
+            
+    #get the most recent position of the bot
+    def get(self):
+        time.sleep(1)
+        
+        with self.odomLock:
+            #print(f"{self.X}, {self.Y}, {self.Z}, {self.Roll}, {self.Pitch}, {self.Yaw}")
+            return (self.X, self.Y, self.Z, self.Roll, self.Pitch, self.Yaw)
+            
+            
+            
+ 
 def main(args=None):
 
     newBotName = ""
@@ -310,7 +381,7 @@ def main(args=None):
     rclpy.init(args=args)
     
     #create multi threads for the node, 2 for each node
-    MultiExecutor = MultiThreadedExecutor(num_threads = 2)
+    MultiExecutor = MultiThreadedExecutor(num_threads = 3)
 
     NewBotNode = botNode(newBotName, exploreX, exploreY)
     
