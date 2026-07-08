@@ -221,6 +221,11 @@ class TaskMetricsLogger(Node):
         self.robot_topics = robot_topics
         self.human_topics = human_topics
         self.out_csv = out_csv
+        
+        # Summary CSV (one row per experiment)
+        base, ext = os.path.splitext(self.out_csv)
+        self.summary_csv = base + "_summary" + ext
+        
         self.include_ids = include_ids
         self.include_raw = include_raw
 
@@ -250,6 +255,27 @@ class TaskMetricsLogger(Node):
         self.writer = csv.DictWriter(self.f, fieldnames=self.columns)
         self.writer.writeheader()
         self.f.flush()
+        
+        # Summary CSV
+        self.summary_columns = [
+            "total_requests",
+            "accepted_requests",
+            "completed_requests",
+            "failed_requests",
+            "ignored_requests",
+            "task_switches",
+            "communication_messages",
+            "total_distance_m",
+            "team_idle_time_s"
+        ]
+
+        self.summary_file = open(self.summary_csv, "w", newline="")
+        self.summary_writer = csv.DictWriter(
+            self.summary_file,
+            fieldnames=self.summary_columns
+        )
+        self.summary_writer.writeheader()
+        self.summary_file.flush()
 
         # Subscriptions
         self.robot_subs = []
@@ -472,6 +498,27 @@ class TaskMetricsLogger(Node):
         self.all_rows_in_order.append(row)
         self._rewrite_csv()
         
+    def write_summary(self):
+        """Write one summary row and close the summary CSV."""
+
+        self.summary_writer.writerow({
+            "total_requests": self.total_requests,
+            "accepted_requests": self.accepted_requests,
+            "completed_requests": self.completed_requests,
+            "failed_requests": self.failed_requests,
+            "ignored_requests": self.ignored_requests,
+            "task_switches": self.task_switches,
+            "communication_messages": self.communication_messages,
+            "total_distance_m": self.total_distance,
+            "team_idle_time_s": self.team_idle_time,
+        })
+
+        self.summary_file.flush()
+        self.summary_file.close()
+
+        self.f.flush()
+        self.f.close()
+        
     # Row building
     def _build_human_task_row(self, rec: TaskRecord, raw_event_json: Optional[str]) -> dict:
         human = self.human_interrupts.get(rec.task_id)
@@ -640,7 +687,7 @@ def main():
         print(f"Total Distance (m)       : {node.total_distance:.2f}")
         print(f"Team Idle Time (s)       : {node.team_idle_time:.2f}")
         print("========================================\n")
-        node.close()
+        node.write_summary()
         node.destroy_node()
         rclpy.shutdown()
 

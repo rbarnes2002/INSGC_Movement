@@ -222,6 +222,11 @@ class TaskMetricsLogger(Node):
         self.robot_topics = robot_topics
         self.human_topics = human_topics
         self.out_csv = out_csv
+        
+        # Summary CSV (one row per experiment)
+        base, ext = os.path.splitext(self.out_csv)
+        self.summary_csv = base + "_summary" + ext
+        
         self.include_ids = include_ids
         self.include_raw = include_raw
 
@@ -251,6 +256,27 @@ class TaskMetricsLogger(Node):
         self.writer = csv.DictWriter(self.f, fieldnames=self.columns)
         self.writer.writeheader()
         self.f.flush()
+        
+        # ---------For the Summary CSV------------
+        self.summary_columns = [
+            "total_requests",
+            "accepted_requests",
+            "completed_requests",
+            "failed_requests",
+            "ignored_requests",
+            "task_switches",
+            "communication_messages",
+            "total_distance_m",
+            "team_idle_time_s"
+        ]
+        self.summary_file = open(self.summary_csv, "w", newline="")
+        self.summary_writer = csv.DictWriter(
+            self.summary_file,
+            fieldnames=self.summary_columns
+        )
+        self.summary_writer.writeheader()
+        self.summary_file.flush()
+        # ----------------------------------------------- (7/8/26)
 
         # Subscriptions
         self.robot_subs = []
@@ -448,6 +474,8 @@ class TaskMetricsLogger(Node):
         elif event == "task_start":
             if rec.task_start_unix is None:
                 rec.task_start_unix = float(ts_unix)
+        elif event == "task_interrupted":
+            self.task_switches += 1 # add 1 to task switching
         elif event == "task_end":
             rec.task_end_unix = float(ts_unix)
 
@@ -486,6 +514,28 @@ class TaskMetricsLogger(Node):
             self.writer.writerow(row)
 
         self.f.flush()
+        
+    def write_summary(self):
+        """Write one summary row and close the summary CSV."""
+
+        self.summary_writer.writerow({
+            "total_requests": self.total_requests,
+            "accepted_requests": self.accepted_requests,
+            "completed_requests": self.completed_requests,
+            "failed_requests": self.failed_requests,
+            "ignored_requests": self.ignored_requests,
+            "task_switches": self.task_switches,
+            "communication_messages": self.communication_messages,
+            "total_distance_m": self.total_distance,
+            "team_idle_time_s": self.team_idle_time,
+        })
+
+        self.summary_file.flush()
+        self.summary_file.close()
+
+        self.f.flush()
+        self.f.close()
+    
     def _build_human_task_row(self, rec: TaskRecord, raw_event_json: Optional[str]) -> dict:
         human = self.human_interrupts.get(rec.task_id)
 
@@ -539,6 +589,7 @@ class TaskMetricsLogger(Node):
             row["raw_event_json"] = raw_event_json
 
         return row
+        
 
 def default_filename() -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -592,7 +643,7 @@ def main():
         print(f"Total Distance (m)       : {node.total_distance:.2f}")
         print(f"Team Idle Time (s)       : {node.team_idle_time:.2f}")
         print("========================================\n")
-        node.close()
+        node.write_summary()
         node.destroy_node()
         rclpy.shutdown()
 
