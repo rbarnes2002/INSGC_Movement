@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """
+Written by Lorence Lesniewski and Ryan Barnes
 CSV columns (ONLY these 10):
   1) robot_id
   2) robot_subtask_start_time
@@ -27,7 +28,7 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
 
-
+import Tasks
 
 # Da Helpers
 
@@ -157,6 +158,7 @@ def parse_forryan_user_topic(raw: str) -> Optional[Tuple[str, str, str]]:
 class HumanInterrupt:
     task_id: str
     created_unix: float
+    human_request_unix:float = None
     urgency: str = ""
     priority: str = ""
     is_priority: Optional[bool] = None
@@ -258,6 +260,19 @@ class TaskMetricsLogger(Node):
         for t in self.human_topics:
             self.human_subs.append(self.create_subscription(String, t, self.on_human_task, 200))
 
+        # Experiment statistics (added July 8th, 2026 for future ref.)
+        self.total_requests = 0
+        self.accepted_requests = 0
+        self.completed_requests = 0
+        self.failed_requests = 0
+        self.ignored_requests = 0
+        
+        self.task_switches = 0
+        self.communication_messages = 0
+        
+        self.total_distance = 0.0
+        self.team_idle_time = 0.0
+        
         self.get_logger().info(f"Robot event topics: {', '.join(self.robot_topics)}")
         self.get_logger().info(f"Human task topics: {', '.join(self.human_topics)}")
         self.get_logger().info(f"Writing CSV to: {self.out_csv}")
@@ -265,77 +280,80 @@ class TaskMetricsLogger(Node):
     # Da Callbacks
 
     def on_human_task(self, msg: String) -> None:
-        raw = msg.data
+        raw = msg.data.strip()
+        if not raw:
+            return
 
-        # First try JSON 
-        data = None
+        # Parse server/bot message format
         try:
-            data = json.loads(raw)
-        except Exception:
-            data = None
+            TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS = Tasks.ParseMsg(raw)
+        except Exception as e:
+            self.get_logger().warn(f"[human_task] Could not parse message: {raw} ({e})")
+            return
 
-        if isinstance(data, dict):
-            created_unix = safe_float(data.get("created_unix"), default=time.time())
-            task_id = str(data.get("task_id") or f"human_{int(created_unix*1000)}")
-            urgency = data.get("urgency", "")
-            priority = data.get("priority", "")
-            action = data.get("action", "")
+        task_id = str(ID)
+        now = time.time()
 
-            # Accept several possible flag names
-            is_priority = (
-                truthy_flag(data.get("is_priority"))
-                or truthy_flag(data.get("priority_interrupt"))
-                or truthy_flag(data.get("is_priority_task"))
-            )
-            # If an explicit urgency flag exists, prefer it as "not priority"
-            urgency_interrupt = truthy_flag(data.get("urgency_interrupt"))
-            if urgency_interrupt is True:
-                is_priority = False
+        if TYPE == "interruption":
+        
+            # Add 1 to total human request
+            self.total_requests += 1
+            self.communication_messages += 1
+            
+            existing = self.human_interrupts.get(task_id)
 
-            h = HumanInterrupt(
-                task_id=task_id,
-                created_unix=float(created_unix),
-                urgency=str(urgency) if urgency is not None else "",
-                priority=str(priority) if priority is not None else "",
-                is_priority=is_priority,
-                action=str(action) if action is not None else "",
-            )
-            self.human_interrupts[task_id] = h
+            if existing is not None:
+                existing.human_request_unix = now
+                if not existing.urgency and URGENCY is not None:
+                    existing.urgency = str(URGENCY)
+                if not existing.priority and PRIORITY is not None:
+                    existing.priority = str(PRIORITY)
+                if not existing.action and TASK is not None:
+                    existing.action = str(TASK)
+            else:
+                self.human_interrupts[task_id] = HumanInterrupt(
+                    task_id=task_id,
+                    created_unix=0.0,  # placeholder; accept time comes later
+                    human_request_unix=now,
+                    urgency=str(URGENCY) if URGENCY is not None else "",
+                    priority=str(PRIORITY) if PRIORITY is not None else "",
+                    is_priority=None,
+                    action=str(TASK) if TASK is not None else "",
+                )
+
             self.human_task_ids.add(task_id)
+            self.get_logger().info(
+                f"[human_task] interruption captured: task_id={task_id}, ts={now}"
+            )
             return
+            
+        if TYPE == "accept":
+        
+            # Add 1 to accepted interruption
+            self.accepted_requests += 1
+            self.communication_messages += 1
+            
+            existing = self.human_interrupts.get(task_id)
 
-        # Fallback: parse ForRyan(1).zip userTopic string
-        parsed = parse_forryan_user_topic(raw)
-        if parsed is None:
-            self.get_logger().warn(f"[human_task] Unrecognized format (not JSON): {raw}")
+            if existing is not None:
+                existing.created_unix = now  # keep deferment based on accept time
+            else:
+                self.human_interrupts[task_id] = HumanInterrupt(
+                    task_id=task_id,
+                    created_unix=now,
+                    human_request_unix=None,
+                    urgency=str(URGENCY) if URGENCY is not None else "",
+                    priority=str(PRIORITY) if PRIORITY is not None else "",
+                    is_priority=None,
+                    action=str(TASK) if TASK is not None else "",
+                )
+
+            self.human_task_ids.add(task_id)
+            self.get_logger().info(
+                f"[human_task] accept captured: robot={TO}, task_id={task_id}, ts={now}"
+            )
             return
-
-        urgency_s, priority_s, short_id = parsed
-        created_unix = time.time()
-
-        # Make task_id stable and distinct from robot task_ids if those are UUID-like
-        task_id = f"user_{short_id}"
-
-        # Lorence publisher doesn't include an explicit flag.
-        # Infer priority tasks as: priority != 2
-        pr_i = _normalize_priority_value(priority_s)
-        inferred_is_priority = None
-
-        # action payload = everything after the id token (index 6 onward)
-        parts = raw.strip().split()
-        action = " ".join(parts[6:]) if len(parts) > 6 else ""
-
-        h = HumanInterrupt(
-            task_id=task_id,
-            created_unix=float(created_unix),
-            urgency=str(urgency_s),
-            priority=str(priority_s),
-            is_priority=inferred_is_priority,
-            action=action,
-        )
-        self.human_interrupts[task_id] = h
-        self.human_task_ids.add(task_id)
-
+        
     def on_robot_event(self, msg: String) -> None:
         raw = msg.data
         try:
@@ -422,10 +440,13 @@ class TaskMetricsLogger(Node):
         elif event == "task_start":
             if rec.task_start_unix is None:
                 rec.task_start_unix = float(ts_unix)
+        elif event == "task_interrupted":
+            self.task_switches += 1 # add 1 to task switching
         elif event == "task_end":
             rec.task_end_unix = float(ts_unix)
 
         if rec.is_human_task and rec.task_end_unix is not None and not rec.finalized:
+            self.completed_requests += 1 # add 1 to completed requests
             self._store_human_task_row(rec, raw_event_json=raw if self.include_raw else None)
             self._update_robot_total_end_for_all_rows(robot_id)
             rec.finalized = True
@@ -457,7 +478,11 @@ class TaskMetricsLogger(Node):
 
         robot_subtask_start = unix_to_iso(rec.subtask_start_unix) if rec.subtask_start_unix else ""
         robot_subtask_end = unix_to_iso(rec.subtask_end_unix) if rec.subtask_end_unix else ""
-        human_created = unix_to_iso(human.created_unix) if human else ""
+        human_created = (
+            unix_to_iso(human.human_request_unix)
+            if human and human.human_request_unix is not None
+            else ""
+        )
         attending_start = unix_to_iso(rec.task_start_unix) if rec.task_start_unix else ""
         attending_end = unix_to_iso(rec.task_end_unix) if rec.task_end_unix else ""
         robot_receiving = unix_to_iso(rec.task_received_unix) if rec.task_received_unix else ""
@@ -604,6 +629,17 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        print("\n========== EXPERIMENT SUMMARY ==========")
+        print(f"Total Human Requests      : {node.total_requests}")
+        print(f"Accepted Requests         : {node.accepted_requests}")
+        print(f"Completed Requests        : {node.completed_requests}")
+        print(f"Failed Requests           : {node.failed_requests}")
+        print(f"Ignored Requests          : {node.ignored_requests}")
+        print(f"Task Switches            : {node.task_switches}")
+        print(f"Communication Messages   : {node.communication_messages}")
+        print(f"Total Distance (m)       : {node.total_distance:.2f}")
+        print(f"Team Idle Time (s)       : {node.team_idle_time:.2f}")
+        print("========================================\n")
         node.close()
         node.destroy_node()
         rclpy.shutdown()
