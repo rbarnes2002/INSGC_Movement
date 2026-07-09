@@ -164,6 +164,9 @@ class HumanInterrupt:
     is_priority: Optional[bool] = None
     action: str = ""
     robot_hint: str = ""
+    
+    accepted: bool = False
+    completed: bool = False
 
 
 @dataclass
@@ -266,6 +269,8 @@ class TaskMetricsLogger(Node):
             "ignored_requests",
             "task_switches",
             "communication_messages",
+            "acceptance_rate_percent",
+            "completion_rate_percent",
             "total_distance_m",
             "team_idle_time_s"
         ]
@@ -299,6 +304,9 @@ class TaskMetricsLogger(Node):
         
         self.total_distance = 0.0
         self.team_idle_time = 0.0
+        
+        self.robot_distances = {}
+        self.robot_idle_times = {}
 
         self.get_logger().info(f"Robot event topics: {', '.join(self.robot_topics)}")
         self.get_logger().info(f"Human task topics: {', '.join(self.human_topics)}")
@@ -346,6 +354,7 @@ class TaskMetricsLogger(Node):
                     priority=str(PRIORITY) if PRIORITY is not None else "",
                     is_priority=None,
                     action=str(TASK) if TASK is not None else "",
+                    accepted=True,
                 )
 
             self.human_task_ids.add(task_id)
@@ -353,7 +362,6 @@ class TaskMetricsLogger(Node):
                 f"[human_task] interruption captured: task_id={task_id}, ts={now}"
             )
             return
-
 
         if TYPE == "accept":
         
@@ -364,6 +372,7 @@ class TaskMetricsLogger(Node):
             existing = self.human_interrupts.get(task_id)
 
             if existing is not None:
+                existing.accepted = True
                 existing.created_unix = now  # keep deferment based on accept time
                 if URGENCY is not None and not existing.urgency:
                     existing.urgency = str(URGENCY)
@@ -403,6 +412,18 @@ class TaskMetricsLogger(Node):
         robot_id = data.get("robot") or data.get("robot_id") or ""
         event = data.get("event", "")
         task_id_raw = str(data.get("task_id", "") or "")
+        
+        # Update latest cumulative distance for this robot
+        distance = safe_float(data.get("distance_traveled"))
+        
+        if robot_id and distance is not None:
+            self.robot_distances[robot_id] = distance
+            
+        # Idle time
+        idle = safe_float(data.get("idle_time"))
+
+        if robot_id and idle is not None:
+            self.robot_idle_times[robot_id] = idle
 
         # Some pipelines may publish user task_ids without the "user_" prefix.
         # If we saw a human interrupt "user_<n>", accept matches to "<n>" too.
@@ -481,6 +502,11 @@ class TaskMetricsLogger(Node):
 
         # Write a row once we have task_end for a human task
         if rec.is_human_task and rec.task_end_unix is not None and not rec.finalized:
+            # Determines if task was failed
+            human = self.human_interrupts.get(rec.task_id)
+            if human is not None:
+                human.completed = True
+        
             self.completed_requests += 1 # add 1 to completed requests
             self._store_human_task_row(rec, raw_event_json=raw if self.include_raw else None)
             self._update_robot_total_end_for_all_rows(robot_id)
@@ -518,6 +544,46 @@ class TaskMetricsLogger(Node):
     def write_summary(self):
         """Write one summary row and close the summary CSV."""
 
+        self.ignored_requests = sum(
+            1
+            for interrupt in self.human_interrupts.values()
+            if not interrupt.accepted
+        )
+        
+        self.failed_requests = sum(
+            1
+            for interrupt in self.human_interrupts.values()
+            if interrupt.accepted and not interrupt.completed
+        )
+        
+        # Calculate total team distance
+        self.total_distance = round(
+            sum(self.robot_distances.values()),
+            2
+        )
+        
+        # Calculate total team idle time
+        self.team_idle_time = round(
+            sum(self.robot_idle_times.values()),
+            2
+        )
+        
+        # Calculate acceptance percentage
+        if self.total_requests > 0:
+            acceptance_rate = round(
+                (self.accepted_requests / self.total_requests) * 100, 2
+        )
+        else:
+            acceptance_rate = 0.0
+            
+        # Calculate completion percentage
+        if self.accepted_requests > 0:
+            completion_rate = round(
+                (self.completed_requests / self.accepted_requests) * 100, 2
+            )
+        else:
+            completion_rate = 0.0
+            
         self.summary_writer.writerow({
             "total_requests": self.total_requests,
             "accepted_requests": self.accepted_requests,
@@ -526,6 +592,10 @@ class TaskMetricsLogger(Node):
             "ignored_requests": self.ignored_requests,
             "task_switches": self.task_switches,
             "communication_messages": self.communication_messages,
+            
+            "acceptance_rate_percent": acceptance_rate,
+            "completion_rate_percent": completion_rate,
+    
             "total_distance_m": self.total_distance,
             "team_idle_time_s": self.team_idle_time,
         })
@@ -632,6 +702,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        node.write_summary()
+    
         print("\n========== EXPERIMENT SUMMARY ==========")
         print(f"Total Human Requests      : {node.total_requests}")
         print(f"Accepted Requests         : {node.accepted_requests}")
@@ -640,10 +712,19 @@ def main():
         print(f"Ignored Requests          : {node.ignored_requests}")
         print(f"Task Switches            : {node.task_switches}")
         print(f"Communication Messages   : {node.communication_messages}")
+        if node.total_requests > 0:
+            print(f"Acceptance Rate         : {(node.accepted_requests / node.total_requests) * 100:.2f}%")
+        else:
+            print("Acceptance Rate         : 0.00%")
+
+        if node.accepted_requests > 0:
+            print(f"Completion Rate         : {(node.completed_requests / node.accepted_requests) * 100:.2f}%")
+        else:
+            print("Completion Rate         : 0.00%")
         print(f"Total Distance (m)       : {node.total_distance:.2f}")
         print(f"Team Idle Time (s)       : {node.team_idle_time:.2f}")
         print("========================================\n")
-        node.write_summary()
+        
         node.destroy_node()
         rclpy.shutdown()
 
