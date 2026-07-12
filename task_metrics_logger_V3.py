@@ -121,7 +121,8 @@ class TaskMetricsLogger(Node):
         include_ids: bool,
         include_raw: bool,
         order_type: str,
-        experiment_time: int
+        experiment_time: int,
+        num_of_bots: int
     ):
         super().__init__("task_metrics_logger")
         
@@ -135,6 +136,9 @@ class TaskMetricsLogger(Node):
         
         #used for aggregate data 
         self.AggrDf = pd.DataFrame(columns=AGGREGATE_COLUMNS)
+        
+        for botIndex in range(1, num_of_bots + 1):
+            self.AggrDf.loc[len(self.AggrDf)] = [f"robot{botIndex}"] + [0.0]*(len(AGGREGATE_COLUMNS) -1)
         
         
         #keeps track of each task (not subtask)
@@ -207,6 +211,7 @@ class TaskMetricsLogger(Node):
             #get event type
             eventType = jsonMsg.get("event")
             task_id = jsonMsg.get("task_id")
+            task_name = jsonMsg.get("task_name")
             int(task_id) # if this fails then that means that the id is Explore_robotX, collision etc
         except Exception:
             task_id = None
@@ -218,7 +223,8 @@ class TaskMetricsLogger(Node):
         if(eventType == "aggregate"): 
             self.onAggregate(jsonMsg)
         elif(jsonMsg.get("baseline_task") == "True"):#handles explore messages
-            self.HandleExploreMessages(jsonMsg)
+            if(task_name != "collisionAvoidance"):
+                self.HandleExploreMessages(jsonMsg)
            
         #makes sure that on_human_task was called first, if not then store the message for later writing
         elif((task_id != None) and (self.findTaskRecord(jsonMsg.get("task_id")) != None)):
@@ -365,7 +371,7 @@ class TaskMetricsLogger(Node):
         
         self.numberOfHumanRequests +=1 
         
-        self.AggrDf.loc["number_of_human_requests"] = self.numberOfHumanRequests
+        self.AggrDf["number_of_human_requests"] = self.numberOfHumanRequests
         self.AggrDf.to_csv(self.aggr_out_csv, index=False)
         
         #self.writeTaskData()
@@ -494,6 +500,7 @@ def main():
     p.add_argument("--include-raw", action="store_true", help="Add raw_event_json column for debugging.")
     p.add_argument("--task-order-type", action="store", default="both", help="Determines whether priority, urgency, or both are stored")
     p.add_argument("--experiment-run-time", action="store", default=300, type=int, help="How long the experiment is, the logger will self-terminate to ensure that data is written to the CSVs. Note: enter 0 to turn off this feature")
+    p.add_argument("--numOfBots", type = int, default=5, help="Number of bots that the user can send interruptions to")
     args = p.parse_args()
 
     robot_topics = args.robot_topic if args.robot_topic else ["/task_events"]
@@ -509,7 +516,8 @@ def main():
         include_ids=args.include_ids,
         include_raw=args.include_raw,
         order_type=args.task_order_type,
-        experiment_time=args.experiment_run_time
+        experiment_time=args.experiment_run_time,
+        num_of_bots = args.numOfBots
     )
     try:
         rclpy.spin(node)
