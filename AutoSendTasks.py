@@ -39,7 +39,7 @@ class UserInput(Node):
             priority = 0
             urgency = 0
             
-            if(self.experimentAddressType == "individual"):
+            if(self.experimentAddressType == "single"):
                 robot = f"robot{random.randint(1, self.numOfBots)}"
             
             if(self.taskOrderType == "urgency"):
@@ -65,7 +65,7 @@ class UserInput(Node):
                 if((time.time() - self.timeStart) > self.experimentRunTime):
                     return
             
-            time.sleep(random.randint(0, maxWaitTime))
+            time.sleep(random.randint(0, self.maxWaitTime))
             
              
          
@@ -81,7 +81,7 @@ def main():
     )
     argParseObj.add_argument("--task-order-type", action="store", default="both", help="Determines whether priority, urgency, or both are stored")
     argParseObj.add_argument("--experiment-run-time", action="store", default=300, type=int, help="How long the experiment is, the logger will self-terminate to ensure that data is written to the CSVs. Note: enter 0 to turn off this feature")
-    argParseObj.add_argument("--experiment-address-type", action="store", default="multi", type=str, help="determines whether the tasks are addressed to specific robots or all of them, options are individual or multi")
+    argParseObj.add_argument("--experiment-address-type", action="store", default="group", type=str, help="determines whether the tasks are addressed to specific robots or all of them, options are single or group")
     argParseObj.add_argument("--max-wait-time", action="store", default=300, type=int, help="Maximum time to wait between sending tasks")
     
     args = argParseObj.parse_args()
