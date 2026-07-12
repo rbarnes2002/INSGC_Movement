@@ -366,6 +366,7 @@ class TaskMetricsLogger(Node):
         self.numberOfHumanRequests +=1 
         
         self.AggrDf.loc["number_of_human_requests"] = self.numberOfHumanRequests
+        self.AggrDf.to_csv(self.aggr_out_csv, index=False)
         
         #self.writeTaskData()
         #self.TaskDf.to_csv(self.out_csv, index=False)
@@ -489,8 +490,8 @@ def main():
     )
     p.add_argument("--out", default=default_filename())
     p.add_argument("--aggr-out", default= aggr_default_filename())
-    #p.add_argument("--include-ids", action="store_true", help="Add robot_id/task_id/action columns (in addition to the 10 categories).")
-    #p.add_argument("--include-raw", action="store_true", help="Add raw_event_json column for debugging.")
+    p.add_argument("--include-ids", action="store_true", help="Add robot_id/task_id/action columns (in addition to the 10 categories).")
+    p.add_argument("--include-raw", action="store_true", help="Add raw_event_json column for debugging.")
     p.add_argument("--task-order-type", action="store", default="both", help="Determines whether priority, urgency, or both are stored")
     p.add_argument("--experiment-run-time", action="store", default=300, type=int, help="How long the experiment is, the logger will self-terminate to ensure that data is written to the CSVs. Note: enter 0 to turn off this feature")
     args = p.parse_args()
