@@ -104,7 +104,8 @@ AGGREGATE_COLUMNS = [
         "idle_time",
         "human_requests_completed",
         "human_requests_received",
-        "number_of_task_switches"
+        "number_of_task_switches",
+        "number_of_human_requests"
     ]
 
 OPTIONAL_ID_COLUMNS = ["robot_id", "task_id", "action"]
@@ -151,6 +152,8 @@ class TaskMetricsLogger(Node):
         self.experimentRunTime = experiment_time
         
         self.experimentTimeStart = time.time()
+        
+        self.numberOfHumanRequests = 0
         
 
         """
@@ -359,6 +362,10 @@ class TaskMetricsLogger(Node):
         self.TaskRecords.append(TempRec)
         
         self.handleCallBackMsgs()
+        
+        self.numberOfHumanRequests +=1 
+        
+        self.AggrDf.loc["number_of_human_requests"] = self.numberOfHumanRequests
         
         #self.writeTaskData()
         #self.TaskDf.to_csv(self.out_csv, index=False)
