@@ -88,24 +88,39 @@ class botNode(Node):
     	
     	#user interruption handling, used to check if a bot should request some interruption
         self.interruptLoad = 0.0
-        self.maxInterruptLoad = 10.0 #maximum number of user interrupts the robot will have (including current ones)
+        self.maxInterruptLoad = 100.0 #maximum number of user interrupts the robot will have (including current ones)
         self.interruptLoadDecay = 1.0 #each time a user task is done, interruptLoad is decreased by this much
     	
     	#this section is designed to run a check for tasks
         self.SubtaskListLock = threading.Lock()
         self.checkSubTaskTimer = self.create_timer(.5, self.checkSubTask)
         
+        #for data collection/aggregate data to send to the logger
+        self.idleTime: float = 0.0
+        self.idleTimeStart: float = None
+        
+        self.numOfExploreTasksComplete: int = 0
+        self.numOfExploreTasks: int = len(self.listOfTasks)
+        
+        self.SendAggregateLog()#this lets the logger know that this bot exists
+        
     #listens to and responds to server
     def botListener(self, msg):
         TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
         
-        #check if it is an accept, if it is for this bot accept interruption
-        if(TYPE == "accept"):
-            self.acceptHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
-                    
-        #check if its an interruption, if it is handle request
-        if(TYPE == "interruption"):
-           self.requestHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
+        if(TO == "all" or TO == self.botName):
+            #check if it is an accept, if it is for this bot accept interruption
+            if(TYPE == "accept"):
+                self.acceptHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
+                        
+            #check if its an interruption, if it is handle request
+            if(TYPE == "interruption"):
+               self.requestHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
+            
+            #set collision flag and type
+            if(TYPE == "collision"):
+                self.collisionHandling(TYPE = TYPE, FROM = FROM, TO = TO, URGENCY = URGENCY, PRIORITY = PRIORITY, ID = ID, TASK = TASK, PARAMS = PARAMS)
+            
      
     #handles whether or not to send a request(to handle some interruption) and sending the request itself
     def requestHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
@@ -171,16 +186,29 @@ class botNode(Node):
                 #set current highest priority
                 if(self.currUrgency < self.listOfTasks[0].urgency):
                     self.currUrgency = self.listOfTasks[0].urgency
+    
+    #handles collision messages from the server, sets collision flag and set type
+    #As of the moment this is not finished or being worked on ~Trey 7/11/26
+    def collisionHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
+        self.collisionType = PARAMS[0]
+        
 
     #checks if there are subtasks available, does the next subtask if so
     def checkSubTask(self):
         #if there are tasks 
-        if(len(self.listOfTasks) > 0):    
+        if(len(self.listOfTasks) > 0):
+            #check if the bot was previously idle
+            if(self.idleTimeStart != None):
+                self.idleTime += (time.time() - self.idleTimeStart)
+                self.idleTimeStart = None
+            #start doing a subtask
             self.ControlLoop()#do subtask()
+            self.SendAggregateLog()
         else:
             #No tasks/exploration tasks, create more exploration tasks
             #self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
              #                  self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
+             self.idleTimeStart = time.time()
              self.get_logger().info("No tasks")
     
     #checks higher urgency interruptions and does a portion of the currentSubtask
@@ -231,6 +259,9 @@ class botNode(Node):
         #after finished, delete subtask and output message
         if(self.currSubtask.isMainTask == False):#finished user interrupt task
             self.interruptLoad -= self.interruptLoadDecay
+        else:#if the subtask is an explore task
+            self.numOfExploreTasksComplete += 1
+            
                 
         self.get_logger().info(f"finished {self.currSubtask.urgency} {self.currSubtask.subTaskID}"
                 + f" of task {self.currSubtask.taskID}\nDeferment time: {time.time() -self.currSubtask.creationTime}")
@@ -265,7 +296,7 @@ class botNode(Node):
                 self.SendLog(subtask = self.currSubtask, event = "subtask_start")
     
     #send update to logger node
-    def SendLog(self, subtask, event):
+    def SendLog(self, subtask, event: str):
         #set log vals
         logDict = {
                     "ts_unix": float(time.time()),
@@ -281,6 +312,23 @@ class botNode(Node):
         msg = String()
         msg.data = json.dumps(logDict)#turn python dict to json
         self.logPublisher.publish(msg)#send 
+    
+    #this sends aggregate data to the launcher, some examples are down time or number of 
+    def SendAggregateLog(self, event:str ="aggregate"):
+        #set log vals
+        logDict = {
+                    "ts_unix": float(time.time()),
+                    "robot": self.botName,
+                    "event": event,
+                    "idle_time": self.idleTime,
+                    "percent_area_explored": (self.numOfExploreTasksComplete / self.numOfExploreTasks), #percentage of explore tasks completed
+                    "distance_traveled": self.BotLocation.getTotalTravelDistance()
+                    }
+                    
+        msg = String()
+        msg.data = json.dumps(logDict)#turn python dict to json
+        self.logPublisher.publish(msg)#send 
+        
 
     #approximates the amount of time until a specific subtask is reached
     #replaced "TravelDistanceUntil" func
@@ -334,8 +382,16 @@ class botLocation():
         self.Pitch = 0.0
         self.Yaw = 0.0
         
+        #total distance traveled
+        self.totalDistanceTraveled = 0.0
+        
+        #used to check if the BotLocation has recieved its first update
+        self.hasInitialLoc = False
+        
         #prevent race conditon between reading odom and updating it
         self.odomLock = threading.Lock()
+        
+        self.distanceLock = threading.Lock()
     
     def update(self, poseMsg):
         newPos = poseMsg.pose.position
@@ -345,6 +401,15 @@ class botLocation():
         tempPitch = math.asin(2*(newOrient.w *newOrient.y - newOrient.z*newOrient.x))
         tempYaw = math.atan2(2*(newOrient.w*newOrient.z + newOrient.x*newOrient.y), 1 - 2*(newOrient.y**2 + newOrient.z**2))
         
+        #update distance. NOTE: since updating botLocation uses an mutually exclusive callback group, there is no race condition for getting self.X and self.Y 
+        with self.distanceLock:
+            if(self.hasInitialLoc == True):
+                #only update if the bot has its initial location
+                self.totalDistanceTraveled += Tasks.findDistance(newPos.x, newPos.y, self.X, self.Y)
+            else:
+                self.hasInitialLoc = True
+        
+        #use lock to avoid race condition
         with self.odomLock:
             self.X = newPos.x
             self.Y = newPos.y
@@ -356,12 +421,16 @@ class botLocation():
             
     #get the most recent position of the bot
     def get(self):
-        time.sleep(1)
-        
         with self.odomLock:
             #print(f"{self.X}, {self.Y}, {self.Z}, {self.Roll}, {self.Pitch}, {self.Yaw}")
             return (self.X, self.Y, self.Z, self.Roll, self.Pitch, self.Yaw)
-            
+    
+    def getTotalTravelDistance(self):
+        with self.distanceLock:
+            return self.totalDistanceTraveled
+    
+    def hasInitialLocation(self):
+        return self.hasInitialLocation
             
             
  

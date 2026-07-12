@@ -57,7 +57,7 @@ def createMsgString(TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
     responseString += TYPE + " "
     responseString += FROM + " "
     responseString += TO + " "
-    if((TYPE == "interruption") or (TYPE == "accept")):#request and ignore messages dont have urgency
+    if((TYPE == "interruption") or (TYPE == "accept") or (TYPE == "collision")):#request and ignore messages dont have urgency
         responseString += URGENCY + " "
         responseString += PRIORITY + " "
     responseString += ID + " "
@@ -74,7 +74,7 @@ def ParseMsg(receivedMessage):
     msgFields = receivedMessage.split()
     
     #if it is a interruption/accept(server) message or a request/ignore(bot) message
-    if((msgFields[0] == "interruption") or (msgFields[0] == "accept")):
+    if((msgFields[0] == "interruption") or (msgFields[0] == "accept") or (msgFields[0] == "collision")):
         TYPE = msgFields[0]
         FROM = msgFields[1]
         TO = msgFields[2]
@@ -89,12 +89,13 @@ def ParseMsg(receivedMessage):
             PARAMS.append(msgFields[i])
             i += 1
         return (TYPE, FROM, TO, URGENCY, PRIORITY, TASKID, TASK, PARAMS)
-        
+    
+    #treated differently since requests and ignore do not have priority or urgency 
     if((msgFields[0] == "request") or (msgFields[0] == "ignore")):
         TYPE = msgFields[0]
         FROM = msgFields[1]
         TO = msgFields[2]
-        URGENCY = "-1"#requests and ignore do not have urgency, this is only done to simply addressing 
+        URGENCY = "-1"#requests and ignore do not have urgency/priority, this is only done to simply addressing 
                     #the output of this func
         PRIORITY = "-1"
         TASKID = msgFields[3]
@@ -106,6 +107,7 @@ def ParseMsg(receivedMessage):
             PARAMS.append(msgFields[i])
             i += 1
         return (TYPE, FROM, TO, URGENCY, PRIORITY, TASKID, TASK, PARAMS)
+        
     return None
 
 
@@ -261,6 +263,8 @@ class Wait(SubTask):
         self.finishY = 0.0
         self.finishZ = 0.0
         
+        self.angular_speed = 1.0
+        
         self.urgency = Urgency
         self.priority = Priority
         
@@ -272,14 +276,16 @@ class Wait(SubTask):
         self.timeChunkSize = timeChunk#size of each chunk of time to wait
     
     def doSubtask(self, botLocObj = None):
+        cmd = Twist()
+        cmd.angular.z = self.angular_speed
         #wait in intervals f timezChunkSize, if time left is less than chunkSize then wait that amount of time
         if(self.timeChunkSize <= (self.taskTimeRecquired - self.timeWaited)):
-            self.MovementPublisher.publish(Twist())
+            self.MovementPublisher.publish(cmd)
             time.sleep(self.timeChunkSize)
             self.timeWaited += self.timeChunkSize
             return True
         else:#when waiting last chunk of time
-            self.MovementPublisher.publish(Twist())
+            self.MovementPublisher.publish(cmd)
             time.sleep(self.taskTimeRecquired - self.timeChunkSize)
             return False
             
