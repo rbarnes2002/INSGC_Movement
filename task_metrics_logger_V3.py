@@ -104,6 +104,8 @@ AGGREGATE_COLUMNS = [
         "idle_time",
         "human_requests_completed",
         "human_requests_received",
+        "ignored_requests",
+        "failed_requests",
         "number_of_task_switches",
         "number_of_human_requests"
     ]
@@ -158,6 +160,8 @@ class TaskMetricsLogger(Node):
         self.experimentTimeStart = time.time()
         
         self.numberOfHumanRequests = 0
+        
+        self.closed = False
         
 
         """
@@ -276,7 +280,7 @@ class TaskMetricsLogger(Node):
         robot = jsonMsg.get("robot")
         task_id = jsonMsg.get("task_id")
         subtask_id = jsonMsg.get("subtask_id")
-        timeStamp = jsonMsg.get("ts_unix") #subtask start time 
+        timeStamp = unix_to_iso(jsonMsg.get("ts_unix")) #subtask start time 
         
         TaskRec = self.findTaskRecord(task_id)
         
@@ -293,7 +297,16 @@ class TaskMetricsLogger(Node):
         
         #now fill in other known data 
         columns = ["timestamp_start_attending_human_request", "robot_total_task_start_time", "robot_deferring_human_request_ms", "priority", "urgency", "human_request_timestamp", "robot_receiving_human_request", "task_type" ]
-        data = [TaskRec.task_start_unix, str(self.experimentTimeStart), str(TaskRec.task_start_unix - TaskRec.task_received_unix), TaskRec.priority, TaskRec.urgency, TaskRec.task_created_unix, TaskRec.task_received_unix, TaskRec.taskType]
+        data = [
+            unix_to_iso(TaskRec.task_start_unix),
+            unix_to_iso(self.experimentTimeStart),
+            str(TaskRec.task_start_unix - TaskRec.task_received_unix),
+            TaskRec.priority,
+            TaskRec.urgency,
+            unix_to_iso(TaskRec.task_created_unix),
+            unix_to_iso(TaskRec.task_received_unix),
+            TaskRec.taskType
+        ]
         
         self.TaskDf.loc[(self.TaskDf["task_id"] == task_id), columns ] = data
         
@@ -304,7 +317,12 @@ class TaskMetricsLogger(Node):
         task_id = jsonMsg.get("task_id")
         subtask_id = jsonMsg.get("subtask_id")
         
-        self.TaskDf.loc[(self.TaskDf["task_id"] == task_id) & (self.TaskDf["subtask_id"] == subtask_id), "robot_subtask_end_time"] = jsonMsg.get("ts_unix")
+        self.TaskDf.loc[
+            (self.TaskDf["task_id"] == task_id) &
+            (self.TaskDf["subtask_id"] == subtask_id),
+            "robot_subtask_end_time"
+        ] = unix_to_iso(jsonMsg.get("ts_unix"))
+        
         self.TaskDf.to_csv(self.out_csv, index=False)
 
     def onTaskEnd(self, jsonMsg):
@@ -313,7 +331,11 @@ class TaskMetricsLogger(Node):
         TaskRec = self.findTaskRecord(task_id)
         TaskRec.task_end_unix = jsonMsg.get("ts_unix")
         
-        self.TaskDf.loc[self.TaskDf["task_id"] == task_id, "timestamp_end_attending_human_request"] =  jsonMsg.get("ts_unix")
+        self.TaskDf.loc[
+            self.TaskDf["task_id"] == task_id,
+            "timestamp_end_attending_human_request"
+        ] = unix_to_iso(jsonMsg.get("ts_unix"))
+        
         self.TaskDf.to_csv(self.out_csv, index=False)
         
         #update the aggregate df 
@@ -356,7 +378,15 @@ class TaskMetricsLogger(Node):
     #this is mainly for adding new tasks to the task records list
     def on_human_task(self, userCmd):
         print(userCmd.data)
+        #print(f"DEBUG: on_human_task() called for task {Tasks.ParseMsg(userCmd.data)[5]}")
+
         TYPE, FROM, TO, URGENCY, PRIORITY, TASKID, TASK, PARAMS = Tasks.ParseMsg(userCmd.data)
+        
+        # ignore duplicate callbacks
+        if self.findTaskRecord(TASKID) is not None:
+            print(f"DEBUG: Duplicate human task {TASKID} ignored")
+            return
+            
         #self.TaskDf[len(self.TaskDf["task_id"])] = {"task_id" : TASKID, "human_request_timestamp" : time.time()}
         TempRec = TaskRecord()
         TempRec.task_id = TASKID
@@ -426,11 +456,19 @@ class TaskMetricsLogger(Node):
         if(self.experimentRunTime > 0):
             if((time.time() - self.experimentTimeStart) > self.experimentRunTime):
                 print("EXPERIMENT ENDED, OUT OF RUN TIME, DEBUG")
+                
+                # stop the timer
+                if self.timer_subscription is not None:
+                    self.timer_subscription.cancel()
+                
                 self.close()
-                self.destroy_node()
+                
+                # so it does not hang in terminal when closing
+                if rclpy.ok():
+                    rclpy.shutdown()
                 
             #write in the robot_total_task_end_time, this is for rundancy in case the logger crashes (we will have a rough end time), this value should be written in at the end
-            self.TaskDf["robot_total_task_end_time"] = str(time.time())
+            self.TaskDf["robot_total_task_end_time"] = unix_to_iso(time.time())
             self.TaskDf.to_csv(self.out_csv, index=False)
                 
     
@@ -454,22 +492,42 @@ class TaskMetricsLogger(Node):
         
         
     def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        
         try:
             #self.writeTaskData()
             
             #if the experiment is using a specific orderType, drop the other column
             if(self.orderType == "priority"):
-                self.TaskDf.drop(columns="urgency")
+                self.TaskDf.drop(columns=["urgency"], inplace=True, errors="ignore")
             elif(self.orderType == "urgency"):
-                self.TaskDf.drop(columns="priority")
+                self.TaskDf.drop(columns=["priority"], inplace=True, errors="ignore")
                 
-            self.TaskDf["robot_total_task_end_time"] = str(time.time())
-                
+            self.TaskDf["robot_total_task_end_time"] = unix_to_iso(time.time())
+            
+            ignored = 0
+            failed = 0
+            
+            for task in self.TaskRecords:
+                # for tasks never received by a robot
+                if task.task_received_unix is None:
+                    ignored += 1
+                    
+                # received but not completed by any robot
+                elif task.task_end_unix is None:
+                    failed += 1
+                 
+            self.AggrDf["ignored_requests"] = ignored
+            self.AggrDf["failed_requests"] = failed
             
             self.TaskDf.to_csv(self.out_csv, index=False)
+            self.AggrDf.to_csv(self.aggr_out_csv, index=False)
             print("CLOSED CORRECTLY")
-        except Exception:
-            pass
+        # in case something goes wrong while saving CSVs
+        except Exception as e:
+            print(f"ERROR while closing logger: {e}")
             
             
 def default_filename() -> str:
@@ -524,9 +582,10 @@ def main():
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.close()
+        node.destroy_node()
+        
         if rclpy.ok():
-            node.close()
-            node.destroy_node()
             rclpy.shutdown()
 
 
