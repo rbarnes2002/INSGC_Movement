@@ -200,7 +200,10 @@ class botNode(Node):
             #check if the bot was previously idle
             if(self.idleTimeStart != None):
                 self.idleTime += (time.time() - self.idleTimeStart)
+                # print(f"DEBUG Idle Time = {self.idleTime:.2f}")
                 self.idleTimeStart = None
+                
+                self.SendAggregateLog()
             #start doing a subtask
             self.ControlLoop()#do subtask()
             self.SendAggregateLog()
@@ -208,7 +211,8 @@ class botNode(Node):
             #No tasks/exploration tasks, create more exploration tasks
             #self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
              #                  self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
-             self.idleTimeStart = time.time()
+             if self.idleTimeStart is None:
+                self.idleTimeStart = time.time()
              self.get_logger().info("No tasks")
     
     #checks higher urgency interruptions and does a portion of the currentSubtask
@@ -230,12 +234,18 @@ class botNode(Node):
         #while the current task is not finished
         while(subtaskNotFinished):
             #check for a higher priority task
-            if(self.currUrgency > self.currSubtask.urgency):
+            if(
+            len(self.listOfTasks) > 0 and
+            self.listOfTasks[0].taskID != self.currSubtask.taskID
+            ):
                  #output interrupted message
                  self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
                  #send interruption to logger
-                 self.SendLog(subtask = self.currSubtask, event = "task_interrupted")
+                 self.SendLog(
+                     subtask = self.currSubtask, 
+                     event = "task_interrupted"
+                 )
                  
                  with self.SubtaskListLock:
                     #put current task pack into the list

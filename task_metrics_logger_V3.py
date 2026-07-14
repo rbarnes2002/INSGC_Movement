@@ -107,7 +107,9 @@ AGGREGATE_COLUMNS = [
         "ignored_requests",
         "failed_requests",
         "number_of_task_switches",
-        "number_of_human_requests"
+        "number_of_human_requests",
+        "acceptance_percent",
+        "completion_percent"
     ]
 
 OPTIONAL_ID_COLUMNS = ["robot_id", "task_id", "action"]
@@ -243,7 +245,16 @@ class TaskMetricsLogger(Node):
             elif(eventType == "task_end"):
                 self.onTaskEnd(jsonMsg)
             elif(eventType == "task_interrupted"):
-                print("NOT written yet")
+                robot = jsonMsg.get("robot")
+                
+                self.AggrDf.loc[
+                    self.AggrDf["robot_id"] == robot,
+                    "number_of_task_switches"
+                ] += 1
+                self.AggrDf.to_csv(self.aggr_out_csv, index=False)
+                
+                print(f"DEBUG: task switch recorded for {robot}")
+
         else:
             self.CallBackMsgs.append(logMsg)
     
@@ -274,7 +285,6 @@ class TaskMetricsLogger(Node):
         
         #keep track of task switches
         self.get_logger().info("Updates task switch on task start DEBUG")
-        self.handleTaskSwitches(jsonMsg)
         
     def onSubtaskStart(self, jsonMsg):
         robot = jsonMsg.get("robot")
@@ -290,6 +300,15 @@ class TaskMetricsLogger(Node):
         #add row to the df
         self.TaskDf = pd.concat([self.TaskDf, pd.DataFrame([newRow])], ignore_index = True)
         """
+        # Ignore duplicate subtask_start events
+        if (
+            (
+                (self.TaskDf["task_id"] == task_id)
+                & (self.TaskDf["subtask_id"] == subtask_id)
+            ).any()
+        ):
+            return
+            
         #creates a new row, the first 4 columns are filled in, the rest are blank
         self.TaskDf.loc[len(self.TaskDf["task_id"])] = [robot, task_id, subtask_id, timeStamp] + [""]*(len(DEFAULT_COLUMNS) - 4)
         
@@ -371,10 +390,8 @@ class TaskMetricsLogger(Node):
         #check/update for task switches
         #keep track of task switches
         self.get_logger().info("Updates task switch on explore start DEBUG")
-        self.handleTaskSwitches(jsonMsg)
         
         
-    
     #this is mainly for adding new tasks to the task records list
     def on_human_task(self, userCmd):
         print(userCmd.data)
@@ -472,25 +489,29 @@ class TaskMetricsLogger(Node):
             self.TaskDf.to_csv(self.out_csv, index=False)
                 
     
-    def handleTaskSwitches(self, jsonMsg):
+    # def handleTaskSwitches(self, jsonMsg):
         #keep track of task switches
-        robot = jsonMsg.get("robot")
-        previousTask = self.robotTaskDict.get(robot)
+        # robot = jsonMsg.get("robot")
+        # previousTask = self.robotTaskDict.get(robot)
        
-        if(jsonMsg.get("baseline_task") == "True"):
-            self.robotTaskDict[robot] = "explore"
-        else:
-            self.robotTaskDict[robot] = "human"
+        # if(jsonMsg.get("baseline_task") == "True"):
+            # self.robotTaskDict[robot] = "explore"
+        # else:
+            # self.robotTaskDict[robot] = "human"
             
         #if robot was not in the dict before   
-        if(previousTask == None):
-            previousTask = self.robotTaskDict.get(robot)
+        # if(previousTask == None):
+            # previousTask = self.robotTaskDict.get(robot)
         
         #if there has been a task switch
-        if(self.robotTaskDict.get(robot) != previousTask):
-            self.AggrDf.loc[(self.AggrDf["robot_id"] == robot), "number_of_task_switches"] += 1
-        
-        
+        # if(self.robotTaskDict.get(robot) != previousTask):
+            # self.AggrDf.loc[(self.AggrDf["robot_id"] == robot), "number_of_task_switches"] += 1
+            # self.AggrDf.to_csv(self.aggr_out_csv, index=False)
+            # print(
+                # f"DEBUG: {robot} switched from {previousTask} "
+                # f"to {self.robotTaskDict.get(robot)}"
+            # )
+            
     def close(self) -> None:
         if self.closed:
             return
@@ -521,6 +542,24 @@ class TaskMetricsLogger(Node):
                  
             self.AggrDf["ignored_requests"] = ignored
             self.AggrDf["failed_requests"] = failed
+            
+            # for calculating percentages
+            total_requests = self.numberOfHumanRequests
+
+            if total_requests > 0:
+                accepted = self.AggrDf["human_requests_received"].sum()
+                completed = self.AggrDf["human_requests_completed"].sum()
+
+                self.AggrDf["acceptance_percent"] = (
+                    accepted / total_requests * 100.0
+                )
+
+                self.AggrDf["completion_percent"] = (
+                    completed / total_requests * 100.0
+                )
+            else:
+                self.AggrDf["acceptance_percent"] = 0.0
+                self.AggrDf["completion_percent"] = 0.0
             
             self.TaskDf.to_csv(self.out_csv, index=False)
             self.AggrDf.to_csv(self.aggr_out_csv, index=False)
