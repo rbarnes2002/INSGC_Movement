@@ -79,12 +79,12 @@ class botNode(Node):
         x, y, z, yaw = Tasks.getPoseHelper(botString)
         #optimize explore
         self.listOfTasks = Tasks.orderSubtasks(self.listOfTasks, x, y)
-                                   
-        self.currSubtask = self.listOfTasks.pop(0)#current subtask being done
+        
+        self.currSubtask = None #self.listOfTasks.pop(0)#current subtask being done
         #the coords at the end of the current subtask
-        self.currFinalX = self.currSubtask.finishX
-        self.currFinalY = self.currSubtask.finishY
-        self.currUrgency = self.currSubtask.urgency#current highest priority level in the subtask list
+        self.currFinalX = self.listOfTasks[0].finishX
+        self.currFinalY = self.listOfTasks[0].finishY
+        self.currUrgency = self.listOfTasks[0].urgency#current highest priority level in the subtask list
     	
     	#user interruption handling, used to check if a bot should request some interruption
         self.interruptLoad = 0.0
@@ -107,6 +107,9 @@ class botNode(Node):
     #listens to and responds to server
     def botListener(self, msg):
         TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
+        
+        #DEBUG
+        #self.get_logger().info(f"{TYPE} {FROM} {TO} {URGENCY} {PRIORITY} {ID} {TASK} {PARAMS}")
         
         if(TO == "all" or TO == self.botName):
             #check if it is an accept, if it is for this bot accept interruption
@@ -186,6 +189,9 @@ class botNode(Node):
                 #set current highest priority
                 if(self.currUrgency < self.listOfTasks[0].urgency):
                     self.currUrgency = self.listOfTasks[0].urgency
+                
+            #DEBUG
+            self.printSubtasks()
     
     #handles collision messages from the server, sets collision flag and set type
     #As of the moment this is not finished or being worked on ~Trey 7/11/26
@@ -200,7 +206,6 @@ class botNode(Node):
             #check if the bot was previously idle
             if(self.idleTimeStart != None):
                 self.idleTime += (time.time() - self.idleTimeStart)
-                # print(f"DEBUG Idle Time = {self.idleTime:.2f}")
                 self.idleTimeStart = None
                 
                 self.SendAggregateLog()
@@ -211,15 +216,17 @@ class botNode(Node):
             #No tasks/exploration tasks, create more exploration tasks
             #self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
              #                  self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
-             if self.idleTimeStart is None:
-                self.idleTimeStart = time.time()
-             self.get_logger().info("No tasks")
+            if self.idleTimeStart is None:
+               self.idleTimeStart = time.time()
+            self.get_logger().info("No tasks")
+            self.printSubtasks()
     
     #checks higher urgency interruptions and does a portion of the currentSubtask
     #NOTE: does not set currentSubtask unless a higher priority one is found
     def ControlLoop(self):
         subtaskNotFinished = True
         #get current subtask and output
+
         with self.SubtaskListLock:
             self.currSubtask = self.listOfTasks.pop(0)
             self.currFinalX = self.currSubtask.finishX
@@ -233,11 +240,11 @@ class botNode(Node):
         
         #while the current task is not finished
         while(subtaskNotFinished):
-            #check for a higher priority task
-            if(
-            len(self.listOfTasks) > 0 and
-            self.listOfTasks[0].taskID != self.currSubtask.taskID
-            ):
+            #check for a higher urgency task
+            #if(
+            #len(self.listOfTasks) > 0 and
+            #self.listOfTasks[0].taskID != self.currSubtask.taskID #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
+            if(self.currUrgency > self.currSubtask.urgency):
                  #output interrupted message
                  self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
@@ -377,6 +384,13 @@ class botNode(Node):
     #when getting an update from gazebo, update when 
     def UpdateBotLocation(self, poseMsg):
         self.BotLocation.update(poseMsg)
+    
+    #predominantly used for debug, prints all of the subtasks that the bot currently has
+    def printSubtasks(self):
+        #with self.SubtaskListLock:
+            self.get_logger().info(f"Current Subtask: TaskName: {self.currSubtask.taskName} TaskID: {self.currSubtask.taskID} SubtaskID: {self.currSubtask.subTaskID} Priority: {self.currSubtask.priority} Urgency: {self.currSubtask.urgency} isMainTask: {str(self.currSubtask.isMainTask)}")
+            for subtask in self.listOfTasks:
+                self.get_logger().info(f"TaskName: {subtask.taskName} TaskID: {subtask.taskID} SubtaskID: {subtask.subTaskID} Priority: {subtask.priority} Urgency: {subtask.urgency} isMainTask: {str(subtask.isMainTask)}")
        
             
 #this object keeps track of the robots odometry, updated inside of botNode
