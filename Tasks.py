@@ -336,9 +336,6 @@ class MoveTo(SubTask):
 
             # Stop if close enough
             if distance < self.distance_tolerance:
-                #self.stop_robot()
-                #self.get_logger().info("Reached target point!")
-                #rclpy.shutdown()
                 return False
                 
             #convert yaw to a positive radian #note: gazebos yaw treats CLOCKWISE as positive,
@@ -378,6 +375,106 @@ class MoveTo(SubTask):
             return True
             
     #helper method
+    def normalize_angle(self, angle):
+        """Normalize angle to [0, 2pi]."""
+        while(not(angle > 0) and (angle < 2*math.pi)):
+            if(angle < 0):
+                angle += 2*math.pi
+            if(angle > 2*math.pi):
+                angle -= 2*math.pi
+        return angle
+
+
+
+#tell the robot to move in a cardinal direction for some amount of time
+class MoveCardinalDirection(SubTask):
+    def __init__(self, BotName, Urgency, Priority, SubTaskID, TaskID, direction = "North", time = 5.0):
+    
+        super().__init__(BotName, SubTaskID, TaskID)
+        #change descriptions
+        self.taskName = "Move_" + direction
+         
+        #final coordinates after the subtask is finished
+        self.finishX = 0.0
+        self.finishY = 0.0
+        self.finishZ = 0.0
+        
+        self.linear_speed = 0.5
+        self.angular_speed = 0.2
+        
+        self.urgency = Urgency
+        self.priority = Priority
+        
+        self.isLocationBased = False
+        
+        #vars for this specific kind of subtask
+        direction = direction.lower()
+        #the direction in radians that the robot will be travelling in 
+        self.direction: float = 0.0
+        
+        if(direction == "north"):
+            self.direction = 0.0
+        elif(direction == "south"):
+            self.direction = math.pi
+        elif(direction == "east"):
+            self.direction = 1.5*math.pi
+        elif(direction == "west"):
+            self.direction = .5*math.pi
+        else:
+            print("incorrect direction")
+            
+        self.time = time
+    
+    def doSubtask(self, botLocObj = None):
+        x = 0.0
+        y = 0.0
+        z = 0.0 
+        yaw = 0.0
+        roll = 0.0
+        pitch = 0.0
+        #botLocObj = None
+            
+        if(botLocObj != None):
+            x, y, z, roll, pitch, yaw = botLocObj.get()
+        else:
+            pose = getPoseHelper(self.botName)
+            x, y, z, yaw = pose
+        
+        #convert yaw to a positive radian #note: gazebos yaw treats CLOCKWISE as positive,
+        # hence we must flip
+        yaw = self.normalize_angle(yaw - math.pi)
+        
+        angle_error = self.direction - yaw
+        
+        cmd = Twist()
+
+        # Rotate toward target
+        if abs(angle_error) > 0.1:
+            direction = 1
+            if(self.direction > yaw):
+                if(abs(angle_error) > math.pi):
+                    direction = 1
+                else:
+                    direction = -1
+            else:
+                if(abs(angle_error) > math.pi):
+                    direction = -1
+                else:
+                    direction = 1
+            
+            cmd.angular.z = self.angular_speed * direction
+            self.MovementPublisher.publish(cmd)
+            return True
+        else:
+            # Move forward when facing cardinal direction
+            cmd.linear.x = self.linear_speed
+            self.MovementPublisher.publish(cmd)
+            time.sleep(self.time)
+            
+            #finish subtask
+            return False
+        
+        
     def normalize_angle(self, angle):
         """Normalize angle to [0, 2pi]."""
         while(not(angle > 0) and (angle < 2*math.pi)):
@@ -469,6 +566,13 @@ def CreateExploreTasks(BotName, urgency, priority, taskID, X_Origin, Y_Origin, X
         
     return subTaskList
     
+#
+#Creates a single MoveCardinalDirectionTask and returns it wrapped as a list
+#
+def CreateMoveCardinalDirectionTask(BotName, urgency, priority, taskID, direction, time):
+    subTaskList = [MoveCardinalDirection(BotName, urgency, priority, 0, taskID, direction, time)]
+    return (subTaskList)
+    
 
 ######################### NewTask ####################################
 #ALL NEW TASKS MUST BE ADDED TO THIS FUNC
@@ -482,6 +586,9 @@ def NewTask(TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
                                     int(PARAMS[2]), int(PARAMS[3]), float(PARAMS[4]))
     elif(TASK == "wait"):
         return CreateWaitTask(TO, int(URGENCY), int(PRIORITY), ID, float(PARAMS[0]), float(PARAMS[1]))
+    elif(TASK == "moveCardinalDirection"):
+        print(f"time is {PARAMS[1]}")
+        return CreateMoveCardinalDirectionTask(TO, int(URGENCY), int(PRIORITY), ID, PARAMS[0], float(PARAMS[1]))
               
 #this func optimizes the current subtasks, this is basically the traveling salesmen problem, uses nearest neighbor
 #optimizes the array given, helper func orderSubtasks
