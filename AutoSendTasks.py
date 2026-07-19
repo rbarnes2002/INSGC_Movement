@@ -43,7 +43,8 @@ class UserInput(Node):
             urgency = 0
             taskIndex = random.randint(0, maxTaskIndex)
             
-            if(self.experimentAddressType == "single"):
+            #remember, the "group" type of experiments mean that the task is sent to a specific robot, yes this is very confusing
+            if(self.experimentAddressType == "group"):
                 robot = f"robot{random.randint(1, self.numOfBots)}"
             
             if(self.taskOrderType == "urgency"):
