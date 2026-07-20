@@ -561,8 +561,18 @@ class TaskMetricsLogger(Node):
                 self.AggrDf["acceptance_percent"] = 0.0
                 self.AggrDf["completion_percent"] = 0.0
             
-            self.TaskDf.to_csv(self.out_csv, index=False)
-            self.AggrDf.to_csv(self.aggr_out_csv, index=False)
+            merged = self.TaskDf.copy()
+
+            for _, robot in self.AggrDf.iterrows():
+                rid = robot["robot_id"]
+                mask = merged["robot_id"] == rid
+
+                for col in self.AggrDf.columns:
+                    if col != "robot_id":
+                        merged.loc[mask, col] = robot[col]
+
+            merged.to_csv(self.out_csv, index=False)
+            
             print("CLOSED CORRECTLY")
         # in case something goes wrong while saving CSVs
         except Exception as e:
