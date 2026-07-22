@@ -1,0 +1,31 @@
+How to read CSV:
+Here is how to interpret the data from the CSV
+
+robot_id: Which robot completed the request
+task_id: Human request number
+subtask_id: Which subtask within the task (right now, should always be 0)
+human_request_timestamp: When the human created the request
+timestamp_start_attending_human_request: When the robot actually started responding
+timestamp_end_attending_human_request: When the robot finished
+robot_deferring_human_request_s: How long the robot waited before beginning
+priority/urgency: Priority or Urgency level/type
+task_type: the kind of task the robot is completing; Wait, MoveCardinalDirection, Explore, Moveto, etc. (A little weird right now b/c technically explore tasks should not be recorded, but in order to get every robot's data recorded we will have to (unless there is a better way)).
+robot_receiving_human_request: Which robot accepted the request
+robot_total_task_start_time: When the robot began executing the overall explore task
+robot_total_task_end_time: When the robot completed the overall explore task
+
+------------These two are only for rows for the "explore" task type--------
+explore_task_start_time: When an explore task started (the baseline, not human interruption task)
+explore_task_end_time: When an explore task ended
+---------------------------------------------------------------------------
+
+distance_traveled: how far each robot traveled
+percent_area_explored: how much of the assigned explore area was successfully explored
+idle_time: how long the robots sat idle (usually occurs AFTER completing the explore task, and receiving/picking up no human interrupts)
+human_requests_completed: how many human interrupts a robot completed (per robot)
+human_requests_received: how many human interrupts a robot accepted (per robot)
+ignored_requests: interrupts not picked up by ANY robot
+number_of_task_switches: how many times the robot switched from explore to interrupt specifically (per robot)
+number_of_human_requests: how many human interruptions were sent TOTAL
+acceptance_percent: how many human interruptions were accepted by any robot
+completion_percent: how many human interruptions were actually completed
