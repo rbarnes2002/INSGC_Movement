@@ -241,10 +241,10 @@ class botNode(Node):
         #while the current task is not finished
         while(subtaskNotFinished):
             #check for a higher urgency task
-            #if(
-            #len(self.listOfTasks) > 0 and
-            #self.listOfTasks[0].taskID != self.currSubtask.taskID #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
-            if(self.currUrgency > self.currSubtask.urgency):
+            if(
+                len(self.listOfTasks) > 0 and
+                self.listOfTasks[0].taskID != self.currSubtask.taskID
+            ): #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
                  #output interrupted message
                  self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
@@ -315,6 +315,7 @@ class botNode(Node):
     #send update to logger node
     def SendLog(self, subtask, event: str):
         #set log vals
+        print(f"DEBUG SendLog: event={event}, task={subtask.taskID}, robot={self.botName}")
         logDict = {
                     "ts_unix": float(time.time()),
                     "robot": self.botName,

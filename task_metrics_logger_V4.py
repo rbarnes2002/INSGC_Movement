@@ -185,11 +185,16 @@ class TaskMetricsLogger(Node):
             #get event type
             eventType = jsonMsg.get("event")
             task_id = jsonMsg.get("task_id")
+            print(
+                f"DEBUG EVENT: "
+                f"task={task_id} "
+                f"event={eventType} "
+                f"baseline={jsonMsg.get('baseline_task')}"
+            )
             task_name = jsonMsg.get("task_name")
             int(task_id) # if this fails then that means that the id is Explore_robotX, collision etc
         except Exception:
             task_id = None
-            print(task_id)
 
         ### for messages that do NOT have a task id
         #if the message does not have a task id, then it is an aggregate log message
@@ -199,9 +204,9 @@ class TaskMetricsLogger(Node):
             # Ignore collision avoidance
             if task_name == "collisionAvoidance":
                 return
-            if eventType == "task_start":
+            if eventType in ("task_start", "subtask_start"):
                 self.onExploreTaskStart(jsonMsg)
-            elif eventType == "task_end":
+            elif eventType in ("task_end", "subtask_end"):
                 self.onExploreTaskEnd(jsonMsg)
             return
            
@@ -219,9 +224,12 @@ class TaskMetricsLogger(Node):
                 self.onTaskEnd(jsonMsg)
             elif(eventType == "task_interrupted"):
                 robot = jsonMsg.get("robot")
-                self.robotStats[robot]["number_of_task_switches"] += 1
-                print(f"DEBUG: task switch recorded for {robot}")
-                
+                if robot in self.robotStats:
+                    self.robotStats[robot]["number_of_task_switches"] += 1
+                    self.get_logger().info(
+                        f"Task switch recorded for {robot}. "
+                        f"Total = {self.robotStats[robot]['number_of_task_switches']}"
+                    )
         else:
             self.CallBackMsgs.append(logMsg)
 
@@ -268,16 +276,20 @@ class TaskMetricsLogger(Node):
             return
             
         #creates a new row, the first 4 columns are filled in, the rest are blank
-        self.TaskDf.loc[len(self.TaskDf["task_id"])] = [robot, task_id, subtask_id, timeStamp] + [""]*(len(DEFAULT_COLUMNS) - 4)
-        
-        
+        new_row = len(self.TaskDf)
+        self.TaskDf.loc[new_row] = [
+            robot,
+            task_id,
+            subtask_id,
+            timeStamp
+        ] + [""] * (len(DEFAULT_COLUMNS) - 4)
         
         #now fill in other known data 
         columns = ["timestamp_start_attending_human_request", "robot_total_task_start_time", "robot_deferring_human_request_s", "priority", "urgency", "human_request_timestamp", "robot_receiving_human_request", "task_type" ]
         data = [
             unix_to_iso(TaskRec.task_start_unix),
-            unix_to_iso(self.experimentTimeStart),
-            str(TaskRec.task_start_unix - TaskRec.task_received_unix),
+            unix_to_iso(TaskRec.task_start_unix),
+            TaskRec.task_start_unix - TaskRec.task_received_unix, # deferment (leave as float)
             TaskRec.priority,
             TaskRec.urgency,
             unix_to_iso(TaskRec.task_created_unix),
@@ -285,7 +297,7 @@ class TaskMetricsLogger(Node):
             TaskRec.taskType
         ]
         
-        self.TaskDf.loc[(self.TaskDf["task_id"] == task_id), columns ] = data
+        self.TaskDf.loc[new_row, columns] = data
         
         #self.writeTaskData()
         # self.TaskDf.to_csv(self.out_csv, index=False)
@@ -339,6 +351,8 @@ class TaskMetricsLogger(Node):
         robot = jsonMsg.get("robot")
         task_id = jsonMsg.get("task_id")
         
+        print(f"DEBUG: Explore START | robot={robot} | task={task_id}")
+        
         # Only create one row for this exploration task
         if (
             (self.TaskDf["task_id"] == task_id)
@@ -356,15 +370,25 @@ class TaskMetricsLogger(Node):
         row["explore_task_start_time"] = unix_to_iso(jsonMsg.get("ts_unix"))
         
         self.TaskDf.loc[len(self.TaskDf)] = row
+        
+        print("DEBUG: Explore row created")
             
     def onExploreTaskEnd(self, jsonMsg):
         robot = jsonMsg.get("robot")
         task_id = jsonMsg.get("task_id")
         
-        self.TaskDf.loc[
+        print(f"DEBUG: Explore END | robot={robot} | task={task_id}")
+        
+        mask = (
             (self.TaskDf["robot_id"] == robot)
             &
-            (self.TaskDf["task_id"] == task_id),
+            (self.TaskDf["task_id"] == task_id)
+        )
+
+        print(f"DEBUG: Explore rows matched = {mask.sum()}")
+
+        self.TaskDf.loc[
+            mask,
             "explore_task_end_time"
         ] = unix_to_iso(jsonMsg.get("ts_unix"))
     
@@ -439,70 +463,76 @@ class TaskMetricsLogger(Node):
             return
         self.closed = True
         
-        # if the experiment is using a specific orderType, drop the other column
-        if self.orderType == "priority":
-            self.TaskDf.drop(columns=["urgency"], inplace=True, errors="ignore")
-        elif self.orderType == "urgency":
-            self.TaskDf.drop(columns=["priority"], inplace=True, errors="ignore")
+        
+        try:
+            # if the experiment is using a specific orderType, drop the other column
+            if self.orderType == "priority":
+                self.TaskDf.drop(columns=["urgency"], inplace=True, errors="ignore")
+            elif self.orderType == "urgency":
+                self.TaskDf.drop(columns=["priority"], inplace=True, errors="ignore")
 
-        # Fill in experiment end time
-        self.TaskDf["robot_total_task_end_time"] = unix_to_iso(time.time())
+            # Fill in experiment end time
+            self.TaskDf["robot_total_task_end_time"] = unix_to_iso(time.time())
 
-        # Count ignored and failed requests
-        ignored = 0
-        failed = 0
+            # Count ignored and failed requests
+            ignored = 0
+            failed = 0
 
-        for task in self.TaskRecords:
-            if task.task_received_unix is None:
-                ignored += 1
-            elif task.task_end_unix is None:
-                failed += 1
+            for task in self.TaskRecords:
+                if task.task_received_unix is None:
+                    ignored += 1
+                elif task.task_end_unix is None:
+                    failed += 1
 
-        # Calculate acceptance/completion percentages
-        accepted = 0
-        completed = 0
+            # Calculate acceptance/completion percentages
+            accepted = 0
+            completed = 0
 
-        for stats in self.robotStats.values():
-            accepted += stats["human_requests_received"]
-            completed += stats["human_requests_completed"]
+            for stats in self.robotStats.values():
+                accepted += stats["human_requests_received"]
+                completed += stats["human_requests_completed"]
 
-        if self.numberOfHumanRequests > 0:
-            acceptance = accepted / self.numberOfHumanRequests * 100.0
-            completion = completed / self.numberOfHumanRequests * 100.0
-        else:
-            acceptance = 0.0
-            completion = 0.0
+            if self.numberOfHumanRequests > 0:
+                acceptance = accepted / self.numberOfHumanRequests * 100.0
+                completion = completed / self.numberOfHumanRequests * 100.0
+            else:
+                acceptance = 0.0
+                completion = 0.0
 
-        # Copy robot statistics into every task row
-        for idx in self.TaskDf.index:
+            # Copy robot statistics into every task row
+            for idx in self.TaskDf.index:
 
-            robot = self.TaskDf.at[idx, "robot_id"]
+                robot = self.TaskDf.at[idx, "robot_id"]
 
-            if robot not in self.robotStats:
-                continue
+                if robot not in self.robotStats:
+                    continue
 
-            stats = self.robotStats[robot]
+                stats = self.robotStats[robot]
 
-            self.TaskDf.at[idx, "distance_traveled"] = stats["distance_traveled"]
-            self.TaskDf.at[idx, "percent_area_explored"] = stats["percent_area_explored"]
-            self.TaskDf.at[idx, "idle_time"] = stats["idle_time"]
-            self.TaskDf.at[idx, "human_requests_completed"] = stats["human_requests_completed"]
-            self.TaskDf.at[idx, "human_requests_received"] = stats["human_requests_received"]
-            self.TaskDf.at[idx, "number_of_task_switches"] = stats["number_of_task_switches"]
+                self.TaskDf.at[idx, "distance_traveled"] = stats["distance_traveled"]
+                self.TaskDf.at[idx, "percent_area_explored"] = stats["percent_area_explored"]
+                self.TaskDf.at[idx, "idle_time"] = stats["idle_time"]
+                self.TaskDf.at[idx, "human_requests_completed"] = stats["human_requests_completed"]
+                self.TaskDf.at[idx, "human_requests_received"] = stats["human_requests_received"]
+                self.TaskDf.at[idx, "number_of_task_switches"] = stats["number_of_task_switches"]
 
-        # Experiment-wide values (same for every row)
-        self.TaskDf["ignored_requests"] = ignored
-        self.TaskDf["failed_requests"] = failed
-        self.TaskDf["number_of_human_requests"] = self.numberOfHumanRequests
-        self.TaskDf["acceptance_percent"] = acceptance
-        self.TaskDf["completion_percent"] = completion
-        self.TaskDf.fillna("", inplace=True)
+            # Experiment-wide values (same for every row)
+            self.TaskDf["ignored_requests"] = ignored
+            self.TaskDf["failed_requests"] = failed
+            self.TaskDf["number_of_human_requests"] = self.numberOfHumanRequests
+            self.TaskDf["acceptance_percent"] = acceptance
+            self.TaskDf["completion_percent"] = completion
+            self.TaskDf.fillna("", inplace=True)
 
-        # Save one CSV
-        self.TaskDf.to_csv(self.out_csv, index=False)
+            # Save one CSV
+            self.TaskDf.to_csv(self.out_csv, index=False)
+            self.TaskDf = self.TaskDf.copy()
 
-        print("CLOSED CORRECTLY")
+            print("CLOSED CORRECTLY")
             
+        except Exception as e:
+            print(f"ERROR while closing logger: {e}")
+             
 def default_filename() -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return os.path.expanduser(f"~/Desktop/task_metrics_{stamp}.csv")
