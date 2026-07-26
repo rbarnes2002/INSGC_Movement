@@ -204,7 +204,6 @@ class botNode(Node):
     #As of the moment this is not finished or being worked on ~Trey 7/11/26
     def collisionHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
         self.collisionType = PARAMS[0]
-        self.get_logger().info(f"{self.collisionType}")
         
 
     #checks if there are subtasks available, does the next subtask if so

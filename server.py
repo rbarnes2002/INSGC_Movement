@@ -191,7 +191,7 @@ class ServerNode(Node):
     def robot5Loc(self, poseMsg):
         self.detectCollisions(4, poseMsg)
         
-    #this is currently not in use
+    #helps detect collisions based on the bots locations/directions
     def detectCollisions(self, currBotIndex, poseMsg):
         #update the bot to new position
         newPos = poseMsg.pose.position
@@ -202,13 +202,10 @@ class ServerNode(Node):
         tempYaw = math.atan2(2*(newOrient.w*newOrient.z + newOrient.x*newOrient.y), 1 - 2*(newOrient.y**2 + newOrient.z**2))
         
         self.botPositions[currBotIndex] = (newPos.x, newPos.y, newPos.z, tempRoll, tempPitch, tempYaw)
-        #print(self.botPositions[currBotIndex])
-        #print(currBotIndex)
         
         #actions that each bot will take to avoid collision
         actions = ["nothing"] * self.numOfBots
-        #options are nothing, (move)left/right, stay, backwards
-        #backwards: move to the back right 
+        #options are nothing, wait, or reverse
         
         #flag to determine if a collision action needs to be sent
         collisionFlag = False
@@ -219,7 +216,6 @@ class ServerNode(Node):
         deg135 = math.pi * .75
         deg225 = math.pi * 1.25
         deg315 = math.pi * 1.75
-        
         
         #find groups of bots that are going to collide
         #test for near collision
@@ -232,17 +228,11 @@ class ServerNode(Node):
                 x2, y2, z2, roll2, pitch2, yaw2 = self.botPositions[bot2Index - 1]
                 distance = Tasks.findDistance(x1, y1, x2, y2)
                 if(distance <= self.collisionDist): #determine what to do to avoid collision
-                    self.get_logger().info(f"{bot1Index} yaw1 {yaw1}")
-                    self.get_logger().info(f"{bot2Index} yaw2 {yaw2}")
                     yaw2 = Tasks.normalizeRadians(yaw2)
-                    self.get_logger().info(f"{bot2Index}  after yaw2 {yaw2}")
                     difAngle = yaw2 - yaw1 
-                    self.get_logger().info(f"difAngle before {difAngle}")
+                    
                     #normalize difference
-                    #difAngle = abs(difAngle)
                     difAngle = Tasks.normalizeRadians(difAngle)
-                    #if(difAngle >= math.pi * 2):
-                      #  difAngle -= math.pi * 2
                       
                     self.get_logger().info(f"{bot1Index} {bot2Index} {distance}")
                     self.get_logger().info(f"difangle {difAngle}")
@@ -251,7 +241,7 @@ class ServerNode(Node):
                     #case A: bots are  simply nearby one another
                     #if(math.abs(difAngle) <= deg45):
                         #Do nothing, continue as normal
-                   
+                    
                     #case B: bots have a similar angle and may rear-end one another
                     if(distance <= self.collisionDist and difAngle <= deg135):
                         if(x1 >= x2):
@@ -274,7 +264,7 @@ class ServerNode(Node):
                                     actions[bot1Index -1] = "wait"
                                     actions[bot2Index -1] = "nothing"
                         else:
-                            if(y1 >= y2):
+                            if(y1 >= y2): #bot 1 is in the "top right" corner compared to bot 2
                                 if( yaw2 > deg45 and yaw2 < deg225):
                                     #case B.5: →1 →2 or ↑1 ↑2 or ↗1 ↗2
                                     actions[bot1Index -1] = "nothing"
@@ -283,7 +273,7 @@ class ServerNode(Node):
                                     #case B.6: ←1 ←2 or ↓1 ↓2 or ↙1 ↙2
                                     actions[bot1Index -1] = "wait"
                                     actions[bot2Index -1] = "nothing"
-                            else:
+                            else: #bot 1 is in the "bottom right" corner compared to bot 2
                                 if( yaw2 > deg135 and yaw2 < deg315):
                                     #case B.7: →1 →2 or ↓1 ↓2 or ↘1 ↘2
                                     actions[bot1Index -1] = "nothing"
