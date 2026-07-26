@@ -116,6 +116,11 @@ def findDistance(x1 = 0.0, y1 = 0.0, x2 = 0.0, y2 = 0.0):
     return ((x2 - x1)**2 + (y2 - y1)**2)**.5
     
 
+#helper func that normalizes a radians angle to be between 0 to 2pi
+def normalizeRadians(radAngle):
+    return (radAngle % math.tau)
+    
+
 #helper func, gets the position of the bot from gazebo
 #this func was taken from riley's "move_to_point.py" file
 def get_pose(MODEL_NAME):
@@ -423,7 +428,9 @@ class MoveCardinalDirection(SubTask):
         else:
             print("incorrect direction")
             
-        self.time = time
+        self.taskTimeRecquired = time
+        self.timeChunkSize = 1.0
+        self.timeWaited = 0.0
     
     def doSubtask(self, botLocObj = None):
         x = 0.0
@@ -466,13 +473,18 @@ class MoveCardinalDirection(SubTask):
             self.MovementPublisher.publish(cmd)
             return True
         else:
-            # Move forward when facing cardinal direction
-            cmd.linear.x = self.linear_speed
-            self.MovementPublisher.publish(cmd)
-            time.sleep(self.time)
-            
-            #finish subtask
-            return False
+             # Move forward when facing cardinal direction
+            if(self.timeChunkSize <= (self.taskTimeRecquired - self.timeWaited)):
+                cmd.linear.x = self.linear_speed
+                self.MovementPublisher.publish(cmd)
+                time.sleep(self.timeChunkSize)
+                self.timeWaited += self.timeChunkSize
+                return True
+            else:#when waiting last chunk of time
+                cmd.linear.x = self.linear_speed
+                self.MovementPublisher.publish(cmd)
+                time.sleep(self.taskTimeRecquired - self.timeWaited)
+                return False
         
         
     def normalize_angle(self, angle):

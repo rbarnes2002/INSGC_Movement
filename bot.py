@@ -5,6 +5,7 @@ from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Twist
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 #import tf_transformations.euler_from_quaternion
 import copy
@@ -50,11 +51,14 @@ class botNode(Node):
         self.poseSubscription
         
         
-    	#publisher section
+    	#publisher section, publishes to the server
         self.publisher_ = self.create_publisher(String, '/BotPublish', 100) 
         
         #publishes to the logging system
         self.logPublisher = self.create_publisher(String, "/task_events", 10)
+        
+        #publishes twist commands for bot movement
+        self.movementPublisher = self.create_publisher(Twist, f"/model/{self.botName}/cmd_vel", 10)
     	
     	#list of subtasks
         self.listOfTasks = []
@@ -85,6 +89,9 @@ class botNode(Node):
         self.currFinalX = self.listOfTasks[0].finishX
         self.currFinalY = self.listOfTasks[0].finishY
         self.currUrgency = self.listOfTasks[0].urgency#current highest priority level in the subtask list
+        
+        #used to avoid collisions, this is the action needed to be done in order to avoid a collision
+        self.collisionType = "nothing" #nothing indicates no action is needed to avoid a collision
     	
     	#user interruption handling, used to check if a bot should request some interruption
         self.interruptLoad = 0.0
@@ -109,7 +116,7 @@ class botNode(Node):
         TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS = Tasks.ParseMsg(msg.data)
         
         #DEBUG
-        #self.get_logger().info(f"{TYPE} {FROM} {TO} {URGENCY} {PRIORITY} {ID} {TASK} {PARAMS}")
+        self.get_logger().info(f"{TYPE} {FROM} {TO} {URGENCY} {PRIORITY} {ID} {TASK} {PARAMS}")
         
         if(TO == "all" or TO == self.botName):
             #check if it is an accept, if it is for this bot accept interruption
@@ -197,6 +204,7 @@ class botNode(Node):
     #As of the moment this is not finished or being worked on ~Trey 7/11/26
     def collisionHandling(self, TYPE, FROM, TO, URGENCY, PRIORITY, ID, TASK, PARAMS):
         self.collisionType = PARAMS[0]
+        self.get_logger().info(f"{self.collisionType}")
         
 
     #checks if there are subtasks available, does the next subtask if so
@@ -240,21 +248,24 @@ class botNode(Node):
         
         #while the current task is not finished
         while(subtaskNotFinished):
-            #check for a higher urgency task
-            if(
-                len(self.listOfTasks) > 0 and
-                self.listOfTasks[0].taskID != self.currSubtask.taskID
-            ): #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
-                 #output interrupted message
-                 self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
+            #check for potential collision
+            if(self.collisionType != "nothing"):
+                self.avoidCollisions()
+            #if(
+            #len(self.listOfTasks) > 0 and
+            #self.listOfTasks[0].taskID != self.currSubtask.taskID #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
+            #check for a higher urgency task, 
+            elif(self.currUrgency > self.currSubtask.urgency and len(self.listOfTasks) > 0 and self.listOfTasks[0].taskID != self.currSubtask.taskID):
+                #output interrupted message
+                self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
                  #send interruption to logger
-                 self.SendLog(
+                self.SendLog(
                      subtask = self.currSubtask, 
                      event = "task_interrupted"
                  )
                  
-                 with self.SubtaskListLock:
+                with self.SubtaskListLock:
                     #put current task pack into the list
                     self.listOfTasks.append(self.currSubtask)
                     #re-optimize
@@ -269,8 +280,12 @@ class botNode(Node):
                     
                     self.checkForNewTaskStart()
 
-            #do subtask, use subtaskNotFinished to determine if task needs to be continued
-            subtaskNotFinished = self.currSubtask.doSubtask(self.BotLocation)
+                #do subtask, use subtaskNotFinished to determine if task needs to be continued
+                subtaskNotFinished = self.currSubtask.doSubtask(self.BotLocation)
+                
+            else:
+                #do subtask, use subtaskNotFinished to determine if task needs to be continued
+                subtaskNotFinished = self.currSubtask.doSubtask(self.BotLocation)
             time.sleep(.3)
         
         #after finished, delete subtask and output message
@@ -286,7 +301,22 @@ class botNode(Node):
         self.UpdateTracker()#update task tracker
         
         self.currSubtask.destroy_node()
-            
+    
+    #checks if there is a possible collision and acts to avoid it
+    def avoidCollisions(self):
+        #check for a possible collision
+        if(self.collisionType != "nothing"):
+            cmd = Twist()
+            if(self.collisionType == "wait"):
+                self.get_logger().info(f"Avoiding collision: wait")
+                self.movementPublisher.publish(cmd)
+                #time.sleep(5)
+            elif(self.collisionType == "reverse"):
+                cmd.linear.x = -0.3
+                cmd.angular.z = 0.05
+                self.movementPublisher.publish(cmd)
+                self.get_logger().info(f"Avoiding collision: reverse")
+                #time.sleep(5)
                 
     #handles updating taskTracker/logging if finished
     def UpdateTracker(self):
@@ -315,7 +345,6 @@ class botNode(Node):
     #send update to logger node
     def SendLog(self, subtask, event: str):
         #set log vals
-        print(f"DEBUG SendLog: event={event}, task={subtask.taskID}, robot={self.botName}")
         logDict = {
                     "ts_unix": float(time.time()),
                     "robot": self.botName,
