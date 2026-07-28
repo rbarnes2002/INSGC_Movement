@@ -108,6 +108,7 @@ class botNode(Node):
         #for data collection/aggregate data to send to the logger
         self.idleTime: float = 0.0
         self.idleTimeStart: float = None
+        self.lastIdleUpdate = None
         
         self.numOfExploreTasksComplete: int = 0
         self.numOfExploreTasks: int = len(self.listOfTasks)
@@ -218,18 +219,28 @@ class botNode(Node):
         # if there is work available, then do it
         if len(self.listOfTasks) > 0:
             if self.idleTimeStart is not None:
-                self.idleTime += time.time() - self.idleTimeStart
                 self.idleTimeStart = None
+                self.lastIdleUpdate = None
                 
             self.ControlLoop()
             self.SendAggregateLog()
     
         # otherwise, robot is idle
         else:
-            if self.idleTimeStart is None:
-                self.idleTimeStart = time.time()
+            now = time.time()
             
-            self.get_logger().info("Idle")
+            # first instant of idling
+            if self.idleTimeStart is None:
+                self.idleTimeStart = now
+                self.lastIdleUpdate = now
+                
+            # still idle: accumulate only the elapsed time since the last update
+            else:
+                self.idleTime += now - self.lastIdleUpdate
+                self.lastIdleUpdate = now
+                
+            self.SendAggregateLog()
+            self.get_logger().info(f"Idle ({self.idleTime:.2f}s)")
     
     #checks higher urgency interruptions and does a portion of the currentSubtask
     #NOTE: does not set currentSubtask unless a higher priority one is found
