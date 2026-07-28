@@ -93,6 +93,9 @@ class botNode(Node):
         #used to avoid collisions, this is the action needed to be done in order to avoid a collision
         self.collisionType = "nothing" #nothing indicates no action is needed to avoid a collision
     	
+    	# prevent logging the same interruption multiple times
+        # self.interruptedCurrentTask = False
+
     	#user interruption handling, used to check if a bot should request some interruption
         self.interruptLoad = 0.0
         self.maxInterruptLoad = 100.0 #maximum number of user interrupts the robot will have (including current ones)
@@ -208,29 +211,29 @@ class botNode(Node):
 
     #checks if there are subtasks available, does the next subtask if so
     def checkSubTask(self):
-        #if there are tasks 
-        if(len(self.listOfTasks) > 0):
-            #check if the bot was previously idle
-            if(self.idleTimeStart != None):
-                self.idleTime += (time.time() - self.idleTimeStart)
+        # if a task is already being executed, don't start another one
+        if self.currSubtask is not None:
+            return
+        
+        # if there is work available, then do it
+        if len(self.listOfTasks) > 0:
+            if self.idleTimeStart is not None:
+                self.idleTime += time.time() - self.idleTimeStart
                 self.idleTimeStart = None
                 
-                self.SendAggregateLog()
-            #start doing a subtask
-            self.ControlLoop()#do subtask()
+            self.ControlLoop()
             self.SendAggregateLog()
+    
+        # otherwise, robot is idle
         else:
-            #No tasks/exploration tasks, create more exploration tasks
-            #self.listOfTasks += Tasks.CreateExploreTasks(self.botName, 0, "Explore_"+ self.botName, 
-             #                  self.exploreX, self.exploreY, self.exploreWidth, self.exploreHeight)
             if self.idleTimeStart is None:
-               self.idleTimeStart = time.time()
-            self.get_logger().info("No tasks")
-            self.printSubtasks()
+                self.idleTimeStart = time.time()
+            
+            self.get_logger().info("Idle")
     
     #checks higher urgency interruptions and does a portion of the currentSubtask
     #NOTE: does not set currentSubtask unless a higher priority one is found
-    def ControlLoop(self):
+    def ControlLoop(self):   
         subtaskNotFinished = True
         #get current subtask and output
 
@@ -254,7 +257,12 @@ class botNode(Node):
             #len(self.listOfTasks) > 0 and
             #self.listOfTasks[0].taskID != self.currSubtask.taskID #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
             #check for a higher urgency task, 
-            elif(self.currUrgency > self.currSubtask.urgency and len(self.listOfTasks) > 0 and self.listOfTasks[0].taskID != self.currSubtask.taskID):
+            elif(
+                len(self.listOfTasks) > 0
+                and self.listOfTasks[0].taskID != self.currSubtask.taskID
+                and self.currSubtask.isMainTask
+                and not self.listOfTasks[0].isMainTask
+            ):
                 #output interrupted message
                 self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
                         f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
@@ -300,16 +308,25 @@ class botNode(Node):
         self.UpdateTracker()#update task tracker
         
         self.currSubtask.destroy_node()
+        
+        self.currSubtask = None # finished current task
+        
+        # if nothing is waiting, begin idle timing
+        if len(self.listOfTasks) == 0:
+            if self.idleTimeStart is None:
+                self.idleTimeStart = time.time()
     
     #checks if there is a possible collision and acts to avoid it
     def avoidCollisions(self):
         #check for a possible collision
         if(self.collisionType != "nothing"):
             cmd = Twist()
+            
             if(self.collisionType == "wait"):
                 self.get_logger().info(f"Avoiding collision: wait")
                 self.movementPublisher.publish(cmd)
                 #time.sleep(5)
+                
             elif(self.collisionType == "reverse"):
                 cmd.linear.x = -0.3
                 cmd.angular.z = 0.05
@@ -371,6 +388,16 @@ class botNode(Node):
                     "distance_traveled": self.BotLocation.getTotalTravelDistance()
                     }
                     
+        print(
+            f"[DEBUG] {self.botName} | "
+            f"idle={self.idleTime:.2f} | "
+            f"queue={len(self.listOfTasks)} | "
+            f"currTask={self.currSubtask.taskID if self.currSubtask else 'None'} | "
+            f"currSubtask={'Yes' if self.currSubtask else 'No'} | "
+            f"collision={self.collisionType} | "
+            f"explore={self.numOfExploreTasksComplete}/{self.numOfExploreTasks}"
+        )
+        
         msg = String()
         msg.data = json.dumps(logDict)#turn python dict to json
         self.logPublisher.publish(msg)#send 

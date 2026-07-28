@@ -208,6 +208,15 @@ class TaskMetricsLogger(Node):
                 self.onExploreTaskStart(jsonMsg)
             elif eventType in ("task_end", "subtask_end"):
                 self.onExploreTaskEnd(jsonMsg)
+            elif eventType == "task_interrupted":
+                robot = jsonMsg.get("robot")
+                
+                if robot in self.robotStats:
+                    self.robotStats[robot]["number_of_task_switches"] += 1
+                    self.get_logger().info(
+                        f"Task switch recorded for {robot}. "
+                        f"Total = {self.robotStats[robot]['number_of_task_switches']}"
+                    )
             return
            
         #makes sure that on_human_task was called first, if not then store the message for later writing
@@ -223,7 +232,9 @@ class TaskMetricsLogger(Node):
             elif(eventType == "task_end"):
                 self.onTaskEnd(jsonMsg)
             elif(eventType == "task_interrupted"):
+                print(f"LOGGER SAW EVENT: {eventType}")
                 robot = jsonMsg.get("robot")
+                print(f"INCREMENTING SWITCHES FOR {robot}")
                 if robot in self.robotStats:
                     self.robotStats[robot]["number_of_task_switches"] += 1
                     self.get_logger().info(
