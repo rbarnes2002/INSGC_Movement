@@ -20,9 +20,10 @@ import math
 
 class botNode(Node):
 
-    def __init__(self, botString, explX, explY):
+    def __init__(self, botString, explX, explY, orderType):
     
         self.botName = botString
+        self.orderType = orderType
     
     	#listener/subscriber section, listens to serverPublish
         super().__init__(botString,  namespace= f'/{botString}')
@@ -268,42 +269,63 @@ class botNode(Node):
             #len(self.listOfTasks) > 0 and
             #self.listOfTasks[0].taskID != self.currSubtask.taskID #NOTE: currsubtask is NOT in the list of tasks, and all subtasks of the same task will have the same urgency
             #check for a higher urgency task, 
-            elif(
-                len(self.listOfTasks) > 0
-                and self.listOfTasks[0].taskID != self.currSubtask.taskID
-                and self.currSubtask.isMainTask
-                and not self.listOfTasks[0].isMainTask
-            ):
-                #output interrupted message
-                self.get_logger().info(f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
-                        f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
-                 #send interruption to logger
-                self.SendLog(
-                     subtask = self.currSubtask, 
-                     event = "task_interrupted"
-                 )
-                 
-                with self.SubtaskListLock:
-                    #put current task pack into the list
-                    self.listOfTasks.append(self.currSubtask)
-                    #re-optimize
-                    self.listOfTasks = Tasks.orderSubtasks(self.listOfTasks, self.currFinalX, self.currFinalY)
-                    #get new higher urgency task
-                    self.currSubtask = self.listOfTasks.pop(0)
-                    self.currFinalX = self.currSubtask.finishX
-                    self.currFinalY = self.currSubtask.finishY
-                    self.currUrgency = self.currSubtask.urgency
-                    self.get_logger().info(f"started {self.currSubtask.urgency} {self.currSubtask.subTaskID} of task " + 
-                        f"{self.currSubtask.taskID} final({self.currSubtask.finishX},{self.currSubtask.finishY})")
+            elif len(self.listOfTasks) > 0 and self.listOfTasks[0].taskID != self.currSubtask.taskID:
+            
+                interrupt = False
+                
+                if self.orderType == "priority":
+                    interrupt = (
+                        self.currSubtask.isMainTask
+                        and not self.listOfTasks[0].isMainTask
+                    )
                     
-                    self.checkForNewTaskStart()
+                elif self.orderType == "urgency":
+                    interrupt = (
+                        self.listOfTasks[0].urgency > self.currSubtask.urgency
+                        or (
+                            self.currSubtask.isMainTask
+                            and not self.listOfTasks[0].isMainTask
+                        )
+                    )
+                
+                if interrupt:
+                    self.get_logger().info(
+                        f"INTERRUPTED {self.currSubtask.urgency} {self.currSubtask.subTaskID} "
+                        f"of task {self.currSubtask.taskID} "
+                        f"final({self.currSubtask.finishX},{self.currSubtask.finishY})"
+                    )
 
-                #do subtask, use subtaskNotFinished to determine if task needs to be continued
+                    self.SendLog(
+                        subtask=self.currSubtask,
+                        event="task_interrupted"
+                    )
+
+                    with self.SubtaskListLock:
+                        self.listOfTasks.append(self.currSubtask)
+                        self.listOfTasks = Tasks.orderSubtasks(
+                            self.listOfTasks,
+                            self.currFinalX,
+                            self.currFinalY
+                        )
+
+                        self.currSubtask = self.listOfTasks.pop(0)
+                        self.currFinalX = self.currSubtask.finishX
+                        self.currFinalY = self.currSubtask.finishY
+                        self.currUrgency = self.currSubtask.urgency
+
+                        self.get_logger().info(
+                            f"started {self.currSubtask.urgency} {self.currSubtask.subTaskID} "
+                            f"of task {self.currSubtask.taskID} "
+                            f"final({self.currSubtask.finishX},{self.currSubtask.finishY})"
+                        )
+
+                        self.checkForNewTaskStart()
+
                 subtaskNotFinished = self.currSubtask.doSubtask(self.BotLocation)
                 
             else:
-                #do subtask, use subtaskNotFinished to determine if task needs to be continued
                 subtaskNotFinished = self.currSubtask.doSubtask(self.BotLocation)
+                
             time.sleep(.3)
         
         #after finished, delete subtask and output message
@@ -531,19 +553,20 @@ def main(args=None):
     exploreX = 0.0
     exploreY = 0.0
     #get system argument for bot name
-    if(len(sys.argv) < 4):#if there is only one arg then no args were given in cmd
+    if(len(sys.argv) < 5):#if there is only one arg then no args were given in cmd
         newBotName = "Generic_Bot"
     else:
         newBotName = sys.argv[1]
         exploreX = float(sys.argv[2])
         exploreY = float(sys.argv[3])
+        orderType = sys.argv[4]
     	
     rclpy.init(args=args)
     
     #create multi threads for the node, 2 for each node
     MultiExecutor = MultiThreadedExecutor(num_threads = 3)
 
-    NewBotNode = botNode(newBotName, exploreX, exploreY)
+    NewBotNode = botNode(newBotName, exploreX, exploreY, orderType)
     
     MultiExecutor.add_node(NewBotNode)
     
