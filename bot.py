@@ -17,6 +17,8 @@ import json
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, Duration
 import math
 
+import signal
+
 
 class botNode(Node):
 
@@ -563,6 +565,13 @@ def main(args=None):
     	
     rclpy.init(args=args)
     
+    def signal_handler(sig, frame):
+        print("\nStopping bot...")
+        rclpy.shutdown()
+        
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     #create multi threads for the node, 2 for each node
     MultiExecutor = MultiThreadedExecutor(num_threads = 3)
 
@@ -570,15 +579,16 @@ def main(args=None):
     
     MultiExecutor.add_node(NewBotNode)
     
-    MultiExecutor.spin()
-
-    #rclpy.spin(NewBotNode)
-
-    # Destroy the node explicitly
-    # (optional - otherwise it will be done automatically
-    # when the garbage collector destroys the node object)
-    NewBotNode.destroy_node()
-    rclpy.shutdown()
+    try:
+        MultiExecutor.spin()
+        
+    finally:
+        print(f"Shutting down {newBotName}...")
+        MultiExecutor.shutdown()
+        NewBotNode.destroy_node()
+        
+    if rclpy.ok():
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

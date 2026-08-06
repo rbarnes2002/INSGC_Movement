@@ -7,6 +7,8 @@ import time
 
 import argparse
 
+import signal
+
 
 class UserInput(Node):
 
@@ -132,7 +134,7 @@ class UserInput(Node):
         termios.tcsetattr(self.fileDesc, termios.TCSADRAIN, self.restoreTerminal)
         print(printStr)
         #set terminal to raw mode, disables line buffering
-        tty.setraw(self.fileDesc)
+        tty.setcbreak(self.fileDesc)
     
     #gets a number from the user between minInt and maxInt, inclusive
     def getNumberFromUser(self, minInt, maxInt):
@@ -167,6 +169,15 @@ def main():
     args = argParseObj.parse_args()
     
     rclpy.init()
+    
+    def signal_handler(sig, frame):
+        raise KeyboardInterrupt
+    
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    userInputNode = None
+    
     try:
         userInputNode = UserInput(numOfBots=args.numOfBots, 
                                             taskOrderType=args.task_order_type, 
@@ -174,8 +185,14 @@ def main():
                                             experimentAddressType=args.experiment_address_type, 
                                             taskList=args.add_task,
                                             taskListPrompts=args.add_task_prompt)
+    
+    except KeyboardInterrupt:
+        print("\nStopping participant interface...")
+    
     finally:
-        userInputNode.destroy_node()
+        if userInputNode is not None:
+            userInputNode.destroy_node()
+            
         rclpy.shutdown()
   
 
