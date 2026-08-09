@@ -215,6 +215,8 @@ class botNode(Node):
 
     #checks if there are subtasks available, does the next subtask if so
     def checkSubTask(self):
+        if(not rclpy.ok()):
+            return
         # if a task is already being executed, don't start another one
         if self.currSubtask is not None:
             return
@@ -241,6 +243,10 @@ class botNode(Node):
             else:
                 self.idleTime += now - self.lastIdleUpdate
                 self.lastIdleUpdate = now
+            
+            #if the robot is idle, still must look out for collisions
+            #if(self.collisionType != "nothing"):
+                #self.avoidCollisions()
                 
             self.SendAggregateLog()
             self.get_logger().info(f"Idle ({self.idleTime:.2f}s)")
@@ -263,7 +269,7 @@ class botNode(Node):
             self.checkForNewTaskStart()
         
         #while the current task is not finished
-        while(subtaskNotFinished):
+        while(subtaskNotFinished and rclpy.ok()):
             #check for potential collision
             if(self.collisionType != "nothing"):
                 self.avoidCollisions()
@@ -554,6 +560,7 @@ def main(args=None):
     newBotName = ""
     exploreX = 0.0
     exploreY = 0.0
+    orderType = "urgency"
     #get system argument for bot name
     if(len(sys.argv) < 5):#if there is only one arg then no args were given in cmd
         newBotName = "Generic_Bot"
@@ -565,12 +572,13 @@ def main(args=None):
     	
     rclpy.init(args=args)
     
+    #For some reason this makes all of the robots hang on kill
     def signal_handler(sig, frame):
         print("\nStopping bot...")
         rclpy.shutdown()
         
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    #signal.signal(signal.SIGINT, signal_handler)
+    #signal.signal(signal.SIGTERM, signal_handler)
     
     #create multi threads for the node, 2 for each node
     MultiExecutor = MultiThreadedExecutor(num_threads = 3)
@@ -581,14 +589,18 @@ def main(args=None):
     
     try:
         MultiExecutor.spin()
-        
+    except(KeyboardInterrupt):
+        pass
+       
     finally:
         print(f"Shutting down {newBotName}...")
-        MultiExecutor.shutdown()
-        NewBotNode.destroy_node()
         
-    if rclpy.ok():
-        rclpy.shutdown()
+        #MultiExecutor.shutdown()
+        #this force closes all of the threads so that the robot doesnt hang 
+        MultiExecutor._executor.shutdown(wait=False)
+        NewBotNode.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

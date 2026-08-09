@@ -291,7 +291,9 @@ class Wait(SubTask):
             return True
         else:#when waiting last chunk of time
             self.MovementPublisher.publish(cmd)
-            time.sleep(self.taskTimeRecquired - self.timeChunkSize)
+            timeLeft = self.taskTimeRecquired - self.timeWaited
+            if(timeLeft > 0):
+                time.sleep(timeLeft)
             return False
             
 #
@@ -569,6 +571,7 @@ def CreateExploreTasks(BotName, urgency, priority, taskID, X_Origin, Y_Origin, X
         Y += increment
         newSubTask = MoveTo(BotName, urgency, priority, subtaskID, taskID, X + X_Origin, Y + Y_Origin, speed)
         newSubTask.isMainTask = True
+        newSubTask.taskName = "Explore"
         subTaskList.append(newSubTask)
         
         subtaskID += 1

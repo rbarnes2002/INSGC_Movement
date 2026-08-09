@@ -234,8 +234,9 @@ class ServerNode(Node):
                     #normalize difference
                     difAngle = Tasks.normalizeRadians(difAngle)
                       
-                    self.get_logger().info(f"{bot1Index} {bot2Index} {distance}")
-                    self.get_logger().info(f"difangle {difAngle}")
+                    #Debug
+                    #self.get_logger().info(f"{bot1Index} {bot2Index} {distance}")
+                    #self.get_logger().info(f"difangle {difAngle}")
                      
                         
                     #case A: bots are  simply nearby one another
@@ -332,20 +333,15 @@ def main(args=None):
    
     try:
         rclpy.spin(NewServerNode)
-    except (KeyboardInterrupt, ExternalShutdownException):
+    except (KeyboardInterrupt):
         pass
     finally:
-        node.close()
-        node.destroy_node()
+        NewServerNode.close()
+        NewServerNode.destroy_node()
         
         if rclpy.ok():
             rclpy.shutdown()
-
-    # Destroy the node explicitly
-    # (optional - otherwise it will be done automatically
-    # when the garbage collector destroys the node object)
-    NewServerNode.destroy_node()
-    rclpy.shutdown()
+        print("Shutting down server...")
 
 
 if __name__ == '__main__':
