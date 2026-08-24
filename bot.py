@@ -355,7 +355,9 @@ class botNode(Node):
         # if nothing is waiting, begin idle timing
         if len(self.listOfTasks) == 0:
             if self.idleTimeStart is None:
-                self.idleTimeStart = time.time()
+                currTime = time.time()
+                self.idleTimeStart = currTime
+                self.lastIdleUpdate = currTime
     
     #checks if there is a possible collision and acts to avoid it
     def avoidCollisions(self):
@@ -485,9 +487,10 @@ class botNode(Node):
     #predominantly used for debug, prints all of the subtasks that the bot currently has
     def printSubtasks(self):
         #with self.SubtaskListLock:
+        if(self.currSubtask is not None):
             self.get_logger().info(f"Current Subtask: TaskName: {self.currSubtask.taskName} TaskID: {self.currSubtask.taskID} SubtaskID: {self.currSubtask.subTaskID} Priority: {self.currSubtask.priority} Urgency: {self.currSubtask.urgency} isMainTask: {str(self.currSubtask.isMainTask)}")
-            for subtask in self.listOfTasks:
-                self.get_logger().info(f"TaskName: {subtask.taskName} TaskID: {subtask.taskID} SubtaskID: {subtask.subTaskID} Priority: {subtask.priority} Urgency: {subtask.urgency} isMainTask: {str(subtask.isMainTask)}")
+        for subtask in self.listOfTasks:
+            self.get_logger().info(f"TaskName: {subtask.taskName} TaskID: {subtask.taskID} SubtaskID: {subtask.subTaskID} Priority: {subtask.priority} Urgency: {subtask.urgency} isMainTask: {str(subtask.isMainTask)}")
        
             
 #this object keeps track of the robots odometry, updated inside of botNode
