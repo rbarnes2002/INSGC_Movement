@@ -1,4 +1,5 @@
-import rclpy, sys, tty, termios
+import rclpy, sys, tty, termios, json
+import threading
 from rclpy.node import Node
 
 from std_msgs.msg import String
@@ -6,8 +7,6 @@ import random
 import time 
 
 import argparse
-
-import signal
 
 
 class UserInput(Node):
@@ -17,6 +16,12 @@ class UserInput(Node):
         
         #publisher section
         self.publisher_ = self.create_publisher(String, 'userTopic', 100)
+        self.task_event_subscriber = self.create_subscription(
+            String,
+            'task_events',
+            self.taskFinishedCallback,
+            100
+        ) 
         self.InterruptID = 0
         
         self.numOfBots = numOfBots
@@ -38,9 +43,32 @@ class UserInput(Node):
         self.fileDesc = sys.stdin.fileno()#gets file descriptor of input
         self.restoreTerminal = termios.tcgetattr(self.fileDesc)#save terminal configs/restore later
         
-        self.publishInput()
 
      
+    #task completion message
+    def taskFinishedCallback(self, msg):
+        try:
+            event = json.loads(msg.data)
+            
+            if event.get("event") == "task_end":
+                robot = event.get("robot")
+                task_name = event.get("task_name")
+                
+                if self.taskOrderType == "urgency":
+                    urgency = event.get("urgency")
+                    self.printToUser(
+                        f"\n{robot} finished urgency {urgency} task {task_name}"
+                    )
+                    
+                elif self.taskOrderType == "priority":
+                    priority = event.get("priority")
+                    self.printToUser(
+                        f"\n{robot} finished priority {priority} task {task_name}"
+                    )
+                
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+    
     #user interruption input thread
     def publishInput(self):
         
@@ -62,35 +90,58 @@ class UserInput(Node):
                 else:
                     taskPrompt += f"{index}: {self.taskList[index]} \n"
         
+        #show input instructions just once @ beginning
+        self.printToUser("Send a new task! Please use the number keys to make your selections!")
+        
+        if(self.experimentAddressType == "single"):
+            self.printToUser(
+                f"Please choose a robot! Enter a number from 1 to {self.numOfBots}"
+            )
+        if(self.taskOrderType == "urgency"):
+            self.printToUser(
+                "\nUrgency: enter 1 for urgent or 0 for nonurgent."
+            )
+        elif(self.taskOrderType == "priority"):
+            self.printToUser(
+                "\nPriority: enter a number from 0 (lowest) to 5 (highest)."
+            )
+        else:
+            self.printToUser(
+                "\nUrgency: enter 1 for urgent or 0 for nonurgent."
+            )
+            self.printToUser(
+                "\nPriority: enter a number from 0 (lowest) to 5 (highest)."
+            )
+            
+        
         #main loop
         try:
             while(True):
                 
                 userShownInterrupt = ""
-                self.printToUser("Send a new task! Please use the number keys to make your selections!")
                
-                #remember, the "group" type of experiments mean that the task is sent to a specific robot, yes this is very confusing
-                #if group get bot number
-                if(self.experimentAddressType == "group"):
-                    self.printToUser(f"\nPlease choose a robot! Hit any key between 1 to {self.numOfBots}")
+                #single is to one robot specifically, group is where its sent to all robots, and one robot
+                #decides to pick it up
+                if(self.experimentAddressType == "single"):
                     robot = f"robot{self.getNumberFromUser(1, self.numOfBots)}"
                     userShownInterrupt += f"{robot} "
+                #lets the user know what robot they chose without prompting a new input
+                if(self.experimentAddressType == "single"):
+                    self.printToUser(f"You chose: {robot}")
                 
                 # task orders 
                 if(self.taskOrderType == "urgency"):
-                    self.printToUser(f"\nPlease choose whether or not the task is urgent! Urgent: 1 Nonurgent: 0")
                     urgency = self.getNumberFromUser(0, 1)
                     userShownInterrupt += f"Urgency: {urgency} "
+                    self.printToUser(f"You chose: Urgency {urgency}")
                 elif(self.taskOrderType == "priority"):
-                    self.printToUser(f"\nPlease choose a priority for the task! lowest priority is 0 and Highest priority is 5 ")
                     priority = self.getNumberFromUser(0, 5)
                     userShownInterrupt += f"Priority: {priority} "
+                    self.printToUser(f"You chose: Priority {priority}")
                 else:#for "both" or defaults
-                    self.printToUser(f"\nPlease choose whether or not the task is urgent! Urgent: 1 Nonurgent: 0")
                     urgency = self.getNumberFromUser(0, 1)
                     userShownInterrupt += f"Urgency: {urgency} "
                     
-                    self.printToUser(f"\nPlease choose a priority for the task! lowest priority is 0 and Highest priority is 5 ")
                     priority = self.getNumberFromUser(0, 5)
                     userShownInterrupt += f"Priority: {priority} "
                     
@@ -134,7 +185,7 @@ class UserInput(Node):
         termios.tcsetattr(self.fileDesc, termios.TCSADRAIN, self.restoreTerminal)
         print(printStr)
         #set terminal to raw mode, disables line buffering
-        tty.setcbreak(self.fileDesc)
+        tty.setraw(self.fileDesc)
     
     #gets a number from the user between minInt and maxInt, inclusive
     def getNumberFromUser(self, minInt, maxInt):
@@ -147,7 +198,8 @@ class UserInput(Node):
                 continue
             
             if((userIntInput >= minInt) and (userIntInput <= maxInt)):
-                    return userIntInput
+                self.printToUser(str(userIntInput))
+                return userIntInput
             else:
                 self.printToUser(f"Please enter a number between {minInt} and {maxInt} inclusive!")
          
@@ -170,29 +222,22 @@ def main():
     
     rclpy.init()
     
-    def signal_handler(sig, frame):
-        raise KeyboardInterrupt
-    
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    userInputNode = None
-    
+    userInputNode = UserInput(numOfBots=args.numOfBots, 
+                                        taskOrderType=args.task_order_type, 
+                                        experimentRunTime=args.experiment_run_time, 
+                                        experimentAddressType=args.experiment_address_type, 
+                                        taskList=args.add_task,
+                                        taskListPrompts=args.add_task_prompt)
     try:
-        userInputNode = UserInput(numOfBots=args.numOfBots, 
-                                            taskOrderType=args.task_order_type, 
-                                            experimentRunTime=args.experiment_run_time, 
-                                            experimentAddressType=args.experiment_address_type, 
-                                            taskList=args.add_task,
-                                            taskListPrompts=args.add_task_prompt)
-    
+        input_thread = threading.Thread(
+            target=userInputNode.publishInput
+        )
+        input_thread.start()
+        rclpy.spin(userInputNode)
     except KeyboardInterrupt:
-        print("\nStopping participant interface...")
-    
+        pass
     finally:
-        if userInputNode is not None:
-            userInputNode.destroy_node()
-            
+        userInputNode.destroy_node()
         rclpy.shutdown()
   
 
