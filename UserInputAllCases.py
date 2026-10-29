@@ -23,6 +23,8 @@ class UserInput(Node):
             100
         ) 
         self.InterruptID = 0
+        self.maxInterruptions = 10
+        self.interruptionsSent = 0
         
         self.numOfBots = numOfBots
         self.taskOrderType = taskOrderType
@@ -117,7 +119,15 @@ class UserInput(Node):
         #main loop
         try:
             while(True):
-                
+
+                # Stop accepting requests after 10 interruptions
+                if self.interruptionsSent >= self.maxInterruptions:
+                    self.printToUser(
+                        "\nYou have reached the 10-interruption limit. "
+                        "No more tasks can be sent during this trial."
+                    )
+                    break
+
                 userShownInterrupt = ""
                
                 #single is to one robot specifically, group is where its sent to all robots, and one robot
@@ -167,6 +177,15 @@ class UserInput(Node):
                 self.printToUser(f"You sent the task: {userShownInterrupt}\n")
                 
                 self.InterruptID += 1
+                self.interruptionsSent += 1
+
+                # Notify participant immediately after the 10th request
+                if self.interruptionsSent >= self.maxInterruptions:
+                    self.printToUser(
+                        "\nYou have reached the 10-interruption limit. "
+                        "Please wait for the trial to finish."
+                    )
+                    break
 
                 if(self.experimentRunTime > 0):
                     if((time.time() - self.timeStart) > self.experimentRunTime):
